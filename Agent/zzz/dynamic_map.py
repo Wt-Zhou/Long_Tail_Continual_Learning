@@ -76,7 +76,7 @@ class DynamicMap():
             self.locate_surrounding_objects_in_lanes(carla_world)
 
             
-    def update_map_from_obs(self, obs, env):
+    def update_map_from_obs(self, obs):
         self.init_dynamic_map()
 
         # Ego information from obs
@@ -88,7 +88,8 @@ class DynamicMap():
 
         self.ego_vehicle.v = math.sqrt(self.ego_vehicle.vx ** 2 + self.ego_vehicle.vy ** 2)
         # The control module used yaw and yawdt
-        self.ego_vehicle.yaw = env.ego_vehicle.get_transform().rotation.yaw / 180.0 * math.pi # Transfer to rad
+        self.ego_vehicle.yaw = obs[4]
+        # self.ego_vehicle.yaw = env.ego_vehicle.get_transform().rotation.yaw / 180.0 * math.pi # Transfer to rad
         # self.ego_vehicle.yawdt = env.ego_vehicle.get_angular_velocity() 
         
         # Env information from obs
@@ -107,14 +108,7 @@ class DynamicMap():
 
         # print("[Dynamic Map]: Add env vehicles num", len(self.vehicles))
 
-
-        # Only append Ref path here
-        if len(self.lanes) == 0:
-            self.lanes.append(env.ref_path)
-            self.lanes_id.append(0)
-            self.lanes_updated = True
-            
-    def update_map_from_list_obs(self, obs, env):
+    def update_map_from_list_obs(self, obs):
         self.init_dynamic_map()
         self.real_time_obs = obs
         # Ego information from list obs
@@ -141,8 +135,9 @@ class DynamicMap():
 
         # print("[Dynamic Map]: Add env vehicles num", len(self.vehicles))
 
-        self.done = env.done
-
+        # self.done = env.done
+        
+    def update_ref_path(self, env):
         # Only append Ref path here
         if len(self.lanes) == 0:
             self.lanes.append(env.ref_path)

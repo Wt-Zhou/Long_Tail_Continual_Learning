@@ -6,27 +6,26 @@ import numpy as np
 from Agent.zzz.actions import TrajectoryAction
 from Agent.zzz.cubic_spline_planner import Spline2D
 from Agent.zzz.frenet import *
-from Agent.zzz.predict import Constant_Velocity_Prediction as Prediction
 from Agent.zzz.tools import *
 
 # Parameter
 MAX_SPEED = 50.0 / 3.6  # maximum speed [m/s]
 MAX_ACCEL = 10.0  # maximum acceleration [m/ss]
 MAX_CURVATURE = 500.0  # maximum curvature [1/m]
-MAX_ROAD_WIDTH = 5.0   # maximum road width [m] # related to RL action space
-D_ROAD_W = 2.99  # road width sampling length [m]
+MAX_ROAD_WIDTH = 3.0   # maximum road width [m] # related to RL action space
+D_ROAD_W = 1.0  # road width sampling length [m]
 DT = 0.1  # time tick [s]
-MAXT = 4.1  # max prediction time [m]
-MINT = 4.0  # min prediction time [m]
+MAXT = 3.1  # max prediction time [m]
+MINT = 3.0  # min prediction time [m]
 TARGET_SPEED = 30.0 / 3.6  # target speed [m/s]
 D_T_S = 20.0 / 3.6  # target speed sampling length [m/s]
 N_S_SAMPLE = 1  # sampling number of target speed
 
 # Collision check
 OBSTACLES_CONSIDERED = 4
-ROBOT_RADIUS = 2.5  # robot radius [m]
-RADIUS_SPEED_RATIO = 1 # higher speed, bigger circle
-MOVE_GAP = 1.5
+ROBOT_RADIUS = 1.0  # robot radius [m]
+RADIUS_SPEED_RATIO = 0 # higher speed, bigger circle
+MOVE_GAP = 1.0
 ONLY_SAMPLE_TO_LEFT = True
 
 # Cost weights
@@ -61,7 +60,7 @@ class JunctionTrajectoryPlanner(object):
         self.dts = D_T_S
         
         # initialize prediction module
-        self.obs_prediction = Prediction(OBSTACLES_CONSIDERED, MAXT, DT, self.radius, RADIUS_SPEED_RATIO, self.move_gap)
+        # self.obs_prediction = Prediction(OBSTACLES_CONSIDERED, MAXT, DT, self.radius, RADIUS_SPEED_RATIO, self.move_gap)
     
     def clear_buff(self, clean_csp=True):
 
@@ -73,14 +72,12 @@ class JunctionTrajectoryPlanner(object):
         self.last_trajectory_array_rule = np.c_[0, 0]
         self.last_trajectory_rule = Frenet_path()
         self.reference_path = None
+        
+        # prediction part
+        # self.obs_prediction.gnn_predictin_model.infer_obs_list = []
+        
         if clean_csp:
             self.csp = None
-    
-    def set_ROBOT_RADIUS(self, radius, move_gap):
-        self.radius = radius
-        self.move_gap = move_gap
-        self.target_speed = 15/3.6
-        self.dts = 5/3.6
 
     def build_frenet_path(self, dynamic_map, clean_current_csp = False):
 
@@ -135,8 +132,8 @@ class JunctionTrajectoryPlanner(object):
         else:
             return None
 
-    def trajectory_update_CP(self, CP_action, update=True):
-        if CP_action == 0:
+    def trajectory_update_CP(self, DCP_action, update=True):
+        if DCP_action == 0:
             # print("[CP]:----> Brake") 
             generated_trajectory =  self.all_trajectory[0][0]
             trajectory_array = np.c_[generated_trajectory.x, generated_trajectory.y]
@@ -144,7 +141,7 @@ class JunctionTrajectoryPlanner(object):
             return trajectory_action          
             
         fplist = self.all_trajectory  
-        bestpath = fplist[int(CP_action - 1)][0]
+        bestpath = fplist[int(DCP_action - 1)][0]
         bestpath.s_d
         trajectory_array = np.c_[bestpath.x, bestpath.y]
         
@@ -156,6 +153,20 @@ class JunctionTrajectoryPlanner(object):
         trajectory_action = TrajectoryAction(trajectory_array, bestpath.s_d[:len(trajectory_array)])
         # print("[CP]: ------> CP Successful Planning")           
         return trajectory_action
+
+    def generate_candidate_trajectories(self, dynamic_map):
+        if self.initialize(dynamic_map):
+            index = 0
+
+            start_state = self.calculate_start_state(dynamic_map)
+            # self.obs_prediction.update_prediction(dynamic_map)
+            
+            generated_trajectory, index = self.frenet_optimal_planning(self.csp, self.c_speed, start_state)
+            
+            return self.all_trajectory
+       
+        else:
+            return None 
 
     def initialize(self, dynamic_map):
         self._dynamic_map = dynamic_map
@@ -211,7 +222,6 @@ class JunctionTrajectoryPlanner(object):
 
     def calculate_start_state(self, dynamic_map):
         start_state = Frenet_state()
-        # print("init",start_state.s0,start_state.c_d,self.c_speed)
 
         if len(self.last_trajectory_array_rule) > 5:
             # find closest point on the last trajectory
@@ -271,8 +281,7 @@ class JunctionTrajectoryPlanner(object):
         candidate_len3 = len(sorted_fplist)
 
         for fp, score, index in sorted_fplist:
-            if self.obs_prediction.check_collision(fp):
-                return fp, index + 1 # 0 for brake trajectory
+            return fp, index + 1 # 0 for brake trajectory
         
         return None,0
 
@@ -304,7 +313,7 @@ class JunctionTrajectoryPlanner(object):
             left_sample_bound = D_ROAD_W
         else:
             left_sample_bound = MAX_ROAD_WIDTH 
-        for di in np.arange(-MAX_ROAD_WIDTH, left_sample_bound, D_ROAD_W):
+        for di in np.arange(-MAX_ROAD_WIDTH, left_sample_bound+0.1, D_ROAD_W):
 
             # Lateral motion planning
             for Ti in np.arange(MINT, MAXT, DT):
