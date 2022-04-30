@@ -74,7 +74,7 @@ class KinematicBicycleModel():
         """
 
         self.dt = dt
-        self.dt_discre = 5 # Larger discre: More precies but slowly
+        self.dt_discre = 1 # Larger discre: More precies but slowly
         self.wheelbase = wheelbase
         self.max_steer = max_steer
         self.c_r = c_r

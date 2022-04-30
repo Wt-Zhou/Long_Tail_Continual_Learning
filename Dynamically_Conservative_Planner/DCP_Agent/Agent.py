@@ -40,11 +40,12 @@ class DCP_Agent():
         # transition model parameter        
         self.ensemble_num = 1
         self.history_frame = 1
-        self.future_frame = 1
+        self.future_frame = 20
         self.obs_scale = 5
         self.action_scale = 5
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
+        self.rollout_times = 1
         
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu')
@@ -53,6 +54,12 @@ class DCP_Agent():
         self.ensemble_transition_model = DCP_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
                                                               self.action_scale, self.device, training)
+        self.history_obs_list = []
+        
+        # collision checking parameter
+        self.robot_radius = 1
+        self.move_gap = 1
+        self.check_radius = self.robot_radius
         
     def act(self, state):
         
@@ -60,9 +67,21 @@ class DCP_Agent():
         self.dynamic_map.update_map_from_list_obs(obs)
         candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
         
-        # DCP process
-        sorted_tuple = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
-        dcp_action = sorted_tuple[0][2] + 1
+        # DCP process            
+        self.history_obs_list.append(obs)
+        if len(self.history_obs_list) >= self.history_frame:
+            worst_Q_list = self.calculate_worst_Q_value(self.history_obs_list, candidate_trajectories_tuple)
+            dcp_action = np.where(worst_Q_list==np.min(worst_Q_list))[0] + 1
+            # print("worst_Q_list",worst_Q_list)
+            # print("dcp_action",dcp_action)
+            self.history_obs_list.pop(0)
+
+        else:
+            dcp_action = 0 # brake
+
+        # sorted_tuple = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
+        # dcp_action = sorted_tuple[0][2] + 1
+        
         dcp_trajectory = self.trajectory_planner.trajectory_update_CP(dcp_action)
         
         control_action =  self.controller.get_control(self.dynamic_map, dcp_trajectory.trajectory, dcp_trajectory.desired_speed)
@@ -72,40 +91,89 @@ class DCP_Agent():
     
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)
-
+        self.history_obs_list = []
+        
     def calculate_worst_Q_value(self, state, candidate_trajectories_tuple):
         worst_Q_list = []
+        time1 = time.time()
+
         for action in candidate_trajectories_tuple:
-            imagination = self.imaginaton(state, action[0])
-            q_value_of_heads = 1
-            worst_Q_value = 1
+            worst_Q_value = 1000
+            for ensemble_index in range(self.ensemble_num):
+                q_value_for_a_head = self.q_value_for_a_head(state, action, ensemble_index)
+
+
+                if q_value_for_a_head < worst_Q_value:
+                    worst_Q_value = q_value_for_a_head
+                    
             worst_Q_list.append(worst_Q_value)
-        
+        time2 = time.time()
+        # print("time_consume", time2-time1)
         return worst_Q_list
 
     def q_value_for_a_head(self, state, action, ensemble_index):
         g_value_list = []
         for i in range(self.rollout_times):
-            g_value = self.calculate_g_value(self.rollout(state, action, ensemble_index))
+            ego_trajectory, rollout_trajectory = self.ensemble_transition_model.rollout(state, action, ensemble_index)
+            g_value = self.calculate_g_value(ego_trajectory, rollout_trajectory)
             g_value_list.append(g_value)
             
         q_value = np.mean(g_value_list)
+        return q_value
         
-    def calculate_g_value(self, rollout_trajectory):
-        g_colli = 0
-        
-        for state in rollout_trajectory:
-            if self.collision_checking(state):
-                g_colli = -50
-                break
-            
+    def calculate_g_value(self, ego_trajectory, rollout_trajectory): 
+        if self.colli_check(ego_trajectory, rollout_trajectory):
+            g_colli = -500
+        else:
+            g_colli = 0
+ 
+        g_ego = ego_trajectory[1] # fp.cf
         g_value = g_colli + g_ego
+        
         return g_value
     
-    def colli_check(self, state):
-        
+    def colli_check(self, ego_trajectory, rollout_trajectory):
+        for i in range(self.future_frame):
+            ego_x = ego_trajectory[0].x[i]
+            ego_y = ego_trajectory[0].y[i]
+            ego_yaw = ego_trajectory[0].yaw[i]
+            
+            for one_vehicle_path in rollout_trajectory:
+                obst_x = one_vehicle_path.x[i]
+                obst_y = one_vehicle_path.y[i]
+                obst_yaw = one_vehicle_path.yaw[i]
+                
+                if self.colli_between_vehicle(ego_x, ego_y, ego_yaw, obst_x, obst_y, obst_yaw):
+                    return True
+                
         return False
     
+    def colli_between_vehicle(self, ego_x, ego_y, ego_yaw, obst_x, obst_y, obst_yaw):
+        ego_front_x = ego_x+np.cos(ego_yaw)*self.move_gap
+        ego_front_y = ego_y+np.sin(ego_yaw)*self.move_gap
+        ego_back_x = ego_x-np.cos(ego_yaw)*self.move_gap
+        ego_back_y = ego_y-np.sin(ego_yaw)*self.move_gap
+        
+        obst_front_x = obst_x+np.cos(obst_yaw)*self.move_gap
+        obst_front_y = obst_y+np.sin(obst_yaw)*self.move_gap
+        obst_back_x = obst_x-np.cos(obst_yaw)*self.move_gap
+        obst_back_y = obst_y-np.sin(obst_yaw)*self.move_gap
+        
+        d = (ego_front_x - obst_front_x)**2 + (ego_front_y - obst_front_y)**2
+        if d <= self.check_radius**2: 
+            return True
+        d = (ego_front_x - obst_back_x)**2 + (ego_front_y - obst_back_y)**2
+        if d <= self.check_radius**2: 
+            return True
+        d = (ego_back_x - obst_front_x)**2 + (ego_back_y - obst_front_y)**2
+        if d <= self.check_radius**2: 
+            return True
+        d = (ego_back_x - obst_back_x)**2 + (ego_back_y - obst_back_y)**2
+        if d <= self.check_radius**2: 
+            return True
+        
+        return False
+        
        
 class DCP_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, action_scale, device, training):
@@ -157,9 +225,10 @@ class DCP_Transition_Model():
             return None
         
         rollout_trajectory = []
-        
         history_obs = state
+        obs = history_obs[-1]
         vehicle_num = 0
+        
         for i in range(len(history_obs[0])):
             if history_obs[0][i][0] != -999: # use -100 as signal, very unstable
                 vehicle_num += 1
@@ -167,7 +236,7 @@ class DCP_Transition_Model():
         history_obs = np.array(history_obs).flatten().tolist()
         history_obs = torch.tensor(history_obs).to(self.device)
 
-        predict_action, sigma = self.ensemble_models[ensemble_index](history_data)
+        predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
         predict_action = predict_action.cpu().detach().numpy()
         
         for j in range(1, vehicle_num):  # exclude ego vehicle
@@ -181,20 +250,21 @@ class DCP_Transition_Model():
             velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
             yaw = obs[j][4]
             for k in range(0, self.future_frame):
-                throttle = predict_action[0][j][2*k] * self.action_scale
-                delta = predict_action[0][j][2*k+1] * self.action_scale
+                throttle = predict_action[j*2*self.future_frame + 2*k] * self.action_scale
+                delta = predict_action[j*2*self.future_frame + 2*k+1] * self.action_scale
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(
                     x, y, yaw, velocity, throttle, delta)
                 one_path.x.append(x)
                 one_path.y.append(y)
+                one_path.yaw.append(yaw)
             # paths_of_one_model.append(one_path)
             rollout_trajectory.append(one_path)
     
-        ego_states = candidate_trajectory
+        ego_trajectory = candidate_trajectory
         
-        return rollout_trajectory
-
         
+        return ego_trajectory, rollout_trajectory
+  
     # transition_training functions
     def add_training_data(self, obs, done):
         trajectory_length = self.history_frame + self.future_frame
@@ -210,7 +280,7 @@ class DCP_Transition_Model():
         if len(self.data) > 0:
             # take data
             one_trajectory = self.data[0]
-            
+
             history_obs = one_trajectory[0:self.history_frame] 
             history_obs = np.array(history_obs).flatten().tolist()
             history_obs = torch.tensor(history_obs).to(self.device)
@@ -218,14 +288,13 @@ class DCP_Transition_Model():
             # target: output action
             target_action = self.get_target_action_from_obs(one_trajectory)
             target_action = np.array(target_action).flatten().tolist()
-            target_action = torch.tensor(
-                target_action).to(self.device).unsqueeze(0)
+            target_action = torch.tensor(target_action).to(self.device)
 
             for i in range(self.ensemble_num):
                 # compute loss
                 predict_action, sigma = self.ensemble_models[i](history_obs)
-                print("target_action",target_action)
-                print("predict_action",predict_action)
+                # print("target_action",target_action)
+                # print("predict_action",predict_action)
                 # print("sigma",sigma)
                 diff = (predict_action - target_action) / sigma
                 loss = torch.mean(0.5 * diff.pow(2) + torch.log(sigma))
@@ -239,35 +308,30 @@ class DCP_Transition_Model():
                 self.ensemble_optimizer[i].step()
 
             # closed loop test
-            # self.predict_future_paths(one_trajectory[0], done=False)
-            # self.predict_future_paths(one_trajectory[1], done=False)
-            # self.predict_future_paths(one_trajectory[2], done=False)
-            # self.predict_future_paths(one_trajectory[3], done=False)
-            # paths_of_all_models = self.predict_future_paths(
-            #     one_trajectory[4], done=False)
+            candidate_trajectory = 1
+            ego_trajectory, rollout_trajectory = self.rollout(one_trajectory[0:self.history_frame] , candidate_trajectory, 0)
+            # print("rollout_trajectory[0]",rollout_trajectory[0].x)
+            # print("one_trajectory",one_trajectory)
+            dx = rollout_trajectory[0].x[-1] - one_trajectory[-1][1][0]
+            dy = rollout_trajectory[0].y[-1] - one_trajectory[-1][1][1]
+            fde = math.sqrt(dx**2 + dy**2)
 
-            # dx = paths_of_all_models[0].x[-1] - one_trajectory[-1][1][0]
-            # dy = paths_of_all_models[0].y[-1] - one_trajectory[-1][1][1]
-            # fde = math.sqrt(dx**2 + dy**2)
-
-            # print("fde", fde)
+            print("fde", fde)
 
             self.trained_data.append(one_trajectory)
             self.data.pop(0)
 
-        # if self.train_step % 10000 == 0:
-        #     self.save_prediction_model(self.train_step)
 
         return None
  
     def get_target_action_from_obs(self, one_trajectory):
-        action_list = []
+
         vehicle_num = 0
         for i in range(len(one_trajectory[0])):
             if one_trajectory[0][i][0] != -999: # use -100 as signal, very unstable
                 vehicle_num += 1
+                
         action_list = []
-
         for j in range(0, vehicle_num):
             vehicle_action = []
             for i in range(0, self.future_frame):
@@ -286,7 +350,8 @@ class DCP_Transition_Model():
 
                 vehicle_action.append(throttle/self.action_scale)
                 vehicle_action.append(delta/self.action_scale)
-                action_list.append(vehicle_action)
+            action_list.append(vehicle_action)
+                
         for k in range (self.agent_num - vehicle_num):
             vehicle_action = []
             for i in range(0, self.future_frame):

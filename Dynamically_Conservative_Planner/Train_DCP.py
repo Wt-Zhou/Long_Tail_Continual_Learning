@@ -46,7 +46,7 @@ if __name__ == '__main__':
             agent.ensemble_transition_model.update_model()
             
             train_step += 1
-            if self.train_step % 10000 == 0:
+            if train_step % 10000 == 0:
                 agent.ensemble_transition_model.save(train_step)
             
             
