@@ -421,17 +421,18 @@ class CarEnv_02_Intersection_fixed:
         self.case_list = []
 
         # one vehicle from left
-        for i in range(0,10):
-            spawn_vehicles = []
-            transform = Transform()
-            transform.location.x = 120 + i * 0.3
-            transform.location.y = 191.8
-            transform.location.z = 1
-            transform.rotation.pitch = 0
-            transform.rotation.yaw = 0
-            transform.rotation.roll = 0
-            spawn_vehicles.append(transform)
-            self.case_list.append(spawn_vehicles)
+        # for i in range(0,10):
+        i = 0
+        spawn_vehicles = []
+        transform = Transform()
+        transform.location.x = 120 + i * 0.3
+        transform.location.y = 191.8
+        transform.location.z = 1
+        transform.rotation.pitch = 0
+        transform.rotation.yaw = 0
+        transform.rotation.roll = 0
+        spawn_vehicles.append(transform)
+        self.case_list.append(spawn_vehicles)
 
         # # one vehicle from left, one before ego
         # for i in range(0,5):

@@ -23,7 +23,7 @@ from Agent.zzz.frenet import Frenet_path
 from Agent.zzz.JunctionTrajectoryPlanner import JunctionTrajectoryPlanner
 from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
     KinematicBicycleModel
-from DCP_Agent.transition_model.predmlp import TrajPredGaussion
+from DCP_Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
 
 EPISODES=62
 
@@ -41,7 +41,9 @@ class DCP_Agent():
         self.ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 20
-        self.obs_scale = 5
+        self.obs_scale = 10
+        self.obs_bias_x = 130
+        self.obs_bias_y = 190
         self.action_scale = 5
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
@@ -53,7 +55,8 @@ class DCP_Agent():
         
         self.ensemble_transition_model = DCP_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
-                                                              self.action_scale, self.device, training)
+                                                              self.obs_scale, self.action_scale, 
+                                                              self.device, training)
         self.history_obs_list = []
         
         # collision checking parameter
@@ -61,9 +64,9 @@ class DCP_Agent():
         self.move_gap = 1
         self.check_radius = self.robot_radius
         
-    def act(self, state):
+    def act(self, obs):
         
-        obs = np.array(state)
+        obs = np.array(obs)
         self.dynamic_map.update_map_from_list_obs(obs)
         candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
         
@@ -176,13 +179,13 @@ class DCP_Agent():
         
        
 class DCP_Transition_Model():
-    def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, action_scale, device, training):
+    def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_scale, action_scale, device, training):
         super(DCP_Transition_Model, self).__init__()
         
         self.ensemble_num = ensemble_num
         self.history_frame = history_frame
         self.future_frame = future_frame
-        # self.obs_scale = 5
+        self.obs_scale = obs_scale
         self.action_scale = action_scale
         self.agent_dimension = agent_dimension  # x,y,vx,vy,yaw
         self.agent_num = agent_num
@@ -200,11 +203,11 @@ class DCP_Transition_Model():
   
             self.ensemble_models.append(env_transition)
             self.ensemble_optimizer.append(torch.optim.Adam(
-                env_transition.parameters(), lr=0.001))
+                env_transition.parameters(), lr=0.0005))
             
         # transition vehicle model
         self.wheelbase = 2.96
-        self.max_steer = np.deg2rad(30)
+        self.max_steer = np.deg2rad(60)
         self.dt = 0.1
         self.c_r = 0.01
         self.c_a = 0.05
@@ -232,8 +235,7 @@ class DCP_Transition_Model():
         for i in range(len(history_obs[0])):
             if history_obs[0][i][0] != -999: # use -100 as signal, very unstable
                 vehicle_num += 1
-
-        history_obs = np.array(history_obs).flatten().tolist()
+        history_obs = (np.array(history_obs).flatten()/self.obs_scale).tolist() # the vehicle model should use original obs
         history_obs = torch.tensor(history_obs).to(self.device)
 
         predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
@@ -269,6 +271,7 @@ class DCP_Transition_Model():
     def add_training_data(self, obs, done):
         trajectory_length = self.history_frame + self.future_frame
         if not done:
+            obs = np.array(obs)
             self.one_trajectory.append(obs)
             if len(self.one_trajectory) > trajectory_length:
                 self.data.append(self.one_trajectory[0:trajectory_length])
@@ -282,7 +285,7 @@ class DCP_Transition_Model():
             one_trajectory = self.data[0]
 
             history_obs = one_trajectory[0:self.history_frame] 
-            history_obs = np.array(history_obs).flatten().tolist()
+            history_obs = (np.array(history_obs).flatten()/self.obs_scale).tolist()
             history_obs = torch.tensor(history_obs).to(self.device)
 
             # target: output action
@@ -294,11 +297,12 @@ class DCP_Transition_Model():
                 # compute loss
                 predict_action, sigma = self.ensemble_models[i](history_obs)
                 # print("target_action",target_action)
+                # print("target_action",target_action[-2])
                 # print("predict_action",predict_action)
+                # print("predict_action",predict_action[-2])
                 # print("sigma",sigma)
                 diff = (predict_action - target_action) / sigma
-                loss = torch.mean(0.5 * diff.pow(2) + torch.log(sigma))
-                
+                loss = torch.mean(0.5 * diff.pow(2) + torch.log(sigma))  
                 print("------------loss", loss)
 
                 # train
@@ -310,12 +314,10 @@ class DCP_Transition_Model():
             # closed loop test
             candidate_trajectory = 1
             ego_trajectory, rollout_trajectory = self.rollout(one_trajectory[0:self.history_frame] , candidate_trajectory, 0)
-            # print("rollout_trajectory[0]",rollout_trajectory[0].x)
-            # print("one_trajectory",one_trajectory)
-            dx = rollout_trajectory[0].x[-1] - one_trajectory[-1][1][0]
-            dy = rollout_trajectory[0].y[-1] - one_trajectory[-1][1][1]
-            fde = math.sqrt(dx**2 + dy**2)
-
+            dx = (rollout_trajectory[0].x[-1] - one_trajectory[-1][1][0])
+            dy = (rollout_trajectory[0].y[-1] - one_trajectory[-1][1][1]) 
+            fde = math.sqrt(dx*dx + dy*dy)
+            print("dy",rollout_trajectory[0].y[-1],one_trajectory[-1][1][1])
             print("fde", fde)
 
             self.trained_data.append(one_trajectory)
