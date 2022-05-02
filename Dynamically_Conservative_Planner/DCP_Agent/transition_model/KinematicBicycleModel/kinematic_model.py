@@ -74,7 +74,7 @@ class KinematicBicycleModel():
         """
 
         self.dt = dt
-        self.dt_discre = 5 # Larger discre: More precies but slowly
+        self.dt_discre = 1 # Larger discre: More precies but slowly
         self.wheelbase = wheelbase
         self.max_steer = max_steer
         self.c_r = c_r
@@ -84,11 +84,12 @@ class KinematicBicycleModel():
         # Compute the local velocity in the x-axis
         
         for i in range(self.dt_discre):
+            
             f_load = velocity * (self.c_r + self.c_a * velocity)
 
             velocity += (self.dt/self.dt_discre) * (throttle - f_load)
-            # if velocity <= 0:
-            #     velocity = 0
+            if velocity <= 0:
+                velocity = 0
             
             # Compute the radius and angular velocity of the kinematic bicycle model
             delta = clip(delta, -self.max_steer, self.max_steer)
@@ -102,6 +103,30 @@ class KinematicBicycleModel():
             y += y_dot * (self.dt/self.dt_discre)
             yaw += omega * (self.dt/self.dt_discre)
             yaw = normalise_angle(yaw)
+        
+        return x, y, yaw, velocity, delta, omega
+    
+    def kinematic_model_list(self, x, y, yaw, velocity, throttle_list, delta_list):
+        # Compute the local velocity in the x-axis
+        
+        f_load = velocity * (self.c_r + self.c_a * velocity)
+
+        velocity += (self.dt) * (throttle - f_load)
+        if velocity <= 0:
+            velocity = 0
+        
+        # Compute the radius and angular velocity of the kinematic bicycle model
+        delta = clip(delta, -self.max_steer, self.max_steer)
+        # Compute the state change rate
+        x_dot = velocity * cos(yaw)
+        y_dot = velocity * sin(yaw)
+        omega = velocity * tan(delta) / self.wheelbase
+
+        # Compute the final state using the discrete time model
+        x += x_dot * (self.dt)
+        y += y_dot * (self.dt)
+        yaw += omega * (self.dt)
+        yaw = normalise_angle(yaw)
         
         return x, y, yaw, velocity, delta, omega
     

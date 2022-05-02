@@ -176,7 +176,7 @@ class CarEnv_02_Intersection_fixed:
         for wp in current_route:
             lanepoint = Lanepoint()
             lanepoint.position.x = wp[0].transform.location.x 
-            lanepoint.position.y = wp[0].transform.location.y
+            lanepoint.position.y = wp[0].transform.location.y 
             self.ref_path.central_path.append(lanepoint)
             t_array.append(lanepoint)
         self.ref_path.central_path_array = np.array(t_array)
@@ -422,7 +422,7 @@ class CarEnv_02_Intersection_fixed:
 
         # one vehicle from left
         # for i in range(0,10):
-        i = 0
+        i = 2
         spawn_vehicles = []
         transform = Transform()
         transform.location.x = 120 + i * 0.3
@@ -544,8 +544,8 @@ class CarEnv_02_Intersection_fixed:
             #         carla.Location(x=112, y=186, z=0.039417)]
             # self.tm.set_path(vehicle, path)
 
-            # route = ["Left"]
-            # self.tm.set_route(vehicle, route) # set_route seems better than set_path, they both cannot control vehicles that already in a intersection
+            route = ["Right"]
+            self.tm.set_route(vehicle, route) # set_route seems better than set_path, they both cannot control vehicles that already in a intersection
             
     def spawn_ego_veh(self):
         global start_point
