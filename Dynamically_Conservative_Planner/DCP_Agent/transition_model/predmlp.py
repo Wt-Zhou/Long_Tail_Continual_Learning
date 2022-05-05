@@ -11,8 +11,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
     KinematicBicycleModel_Pytorch
-from torch_geometric.data import Data
-from torch_geometric.nn import MessagePassing, max_pool
 
 
 class TrajPredMLP(nn.Module):

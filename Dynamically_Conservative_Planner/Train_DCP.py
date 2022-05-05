@@ -48,17 +48,17 @@ if __name__ == '__main__':
             
             # plot
             if len(agent.rollout_trajectory_tuple)>0:
-                for rollout_trajectory in agent.rollout_trajectory_tuple:
-                    for i in range(len(rollout_trajectory[0].x)-1):
-                        env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0].x[i],y=rollout_trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
-                                            end=carla.Location(x=rollout_trajectory[0].x[i+1],y=rollout_trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+1), 
-                                            thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.2)
-
+                for rollout_trajectory_head in agent.rollout_trajectory_tuple:
+                    for rollout_trajectory in rollout_trajectory_head:                     
+                        for i in range(len(rollout_trajectory[0])-1):
+                            env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
+                                                end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
+                                                thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.2)
             
-            train_step += 1
             if train_step % 10000 == 0:
                 agent.ensemble_transition_model.save(train_step)
-            
+            train_step += 1
+
             
             if done:
                 agent.clear_buff()

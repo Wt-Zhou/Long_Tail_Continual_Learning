@@ -6,14 +6,18 @@ import os.path as osp
 import random
 import sys
 import time
+from math import atan2
 
 import gym
 import matplotlib.pyplot as plt
+import numba
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from joblib import Parallel, delayed
+from numba import jit
+from numpy import clip, cos, sin, tan
 from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
@@ -26,6 +30,105 @@ from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
 from DCP_Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
 
 EPISODES=62
+
+
+@jit(nopython=True)
+def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale, steer_scale):
+    # vehicle model parameter
+    wheelbase = 2.96
+    max_steer = np.deg2rad(90)
+    dt = 0.1
+    c_r = 0.01
+    c_a = 0.05
+
+    path_list = []
+
+    for j in range(1, vehicle_num):
+        x = obs[j][0]
+        y = obs[j][1]
+        velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
+        yaw = obs[j][4]
+        
+        path = []
+        x_list = []
+        y_list = []
+        yaw_list = []
+    
+        for k in range(future_frame):
+            throttle = action_list[j*2*future_frame + 2*k] * throttle_scale
+            delta = action_list[j*2*future_frame + 2*k+1] * steer_scale
+            f_load = velocity * (c_r + c_a * velocity)
+
+            velocity += (dt) * (throttle - f_load)
+            if velocity <= -5:
+                velocity = 0
+            
+            # Compute the radius and angular velocity of the kinematic bicycle model
+            if delta >= max_steer:
+                delta = max_steer
+            elif delta <= -max_steer:
+                delta = -max_steer
+            # Compute the state change rate
+            x_dot = velocity * cos(yaw)
+            y_dot = velocity * sin(yaw)
+            omega = velocity * tan(delta) / wheelbase
+
+            # Compute the final state using the discrete time model
+            x += x_dot * dt
+            y += y_dot * dt
+            yaw += omega * dt
+            yaw = atan2(sin(yaw), cos(yaw))
+                
+            x_list.append(x)
+            y_list.append(y)
+            yaw_list.append(yaw)
+
+        path.append(x_list)
+        path.append(y_list)
+        path.append(yaw_list)
+        path_list.append(path)
+        
+    return path_list
+
+@jit(nopython=True)
+def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, future_frame, move_gap, check_radius):
+    
+    for i in range(future_frame):
+        ego_x = ego_x_list[i]
+        ego_y = ego_y_list[i]
+        ego_yaw = ego_yaw_list[i]
+        
+        ego_front_x = ego_x+np.cos(ego_yaw)*move_gap
+        ego_front_y = ego_y+np.sin(ego_yaw)*move_gap
+        ego_back_x = ego_x-np.cos(ego_yaw)*move_gap
+        ego_back_y = ego_y-np.sin(ego_yaw)*move_gap
+        
+        for j in range(len(rollout_trajectory)):
+            one_vehicle_path = rollout_trajectory[j]
+            obst_x = one_vehicle_path[0][i]
+            obst_y = one_vehicle_path[1][i]
+            obst_yaw = one_vehicle_path[2][i]
+            
+            obst_front_x = obst_x+np.cos(obst_yaw)*move_gap
+            obst_front_y = obst_y+np.sin(obst_yaw)*move_gap
+            obst_back_x = obst_x-np.cos(obst_yaw)*move_gap
+            obst_back_y = obst_y-np.sin(obst_yaw)*move_gap
+            
+            d = (ego_front_x - obst_front_x)**2 + (ego_front_y - obst_front_y)**2
+            if d <= check_radius**2: 
+                return True
+            d = (ego_front_x - obst_back_x)**2 + (ego_front_y - obst_back_y)**2
+            if d <= check_radius**2: 
+                return True
+            d = (ego_back_x - obst_front_x)**2 + (ego_back_y - obst_front_y)**2
+            if d <= check_radius**2: 
+                return True
+            d = (ego_back_x - obst_back_x)**2 + (ego_back_y - obst_back_y)**2
+            if d <= check_radius**2: 
+                return True
+            
+    return False
+    
 
 class DCP_Agent():
     def __init__(self, env, training=False):
@@ -40,11 +143,11 @@ class DCP_Agent():
         # transition model parameter        
         self.ensemble_num = 20
         self.history_frame = 1
-        self.future_frame = 20
+        self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
         self.obs_scale = 10
         self.obs_bias_x = 130
         self.obs_bias_y = 200
-        self.throttle_scale = 10
+        self.throttle_scale = 0.5
         self.steer_scale = 0.1
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
@@ -71,7 +174,6 @@ class DCP_Agent():
         obs = np.array(obs)
         self.dynamic_map.update_map_from_list_obs(obs)
         candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
-        # print("obs",obs)
         # DCP process            
         self.history_obs_list.append(obs)
         time1 = time.time()
@@ -108,36 +210,27 @@ class DCP_Agent():
         worst_Q_list.append(-500) # -500 reward for brake action, low reward but bigger than collision trajectories
 
         for action in candidate_trajectories_tuple:
+
             worst_Q_value = 9999
             self.rollout_trajectory_tuple = []
 
-            tasks = []
-
-            for ensemble_index in range(self.ensemble_num):
-                tasks.append(delayed(self.q_value_for_a_head)(state, action, ensemble_index))
-            multi_work = Parallel(n_jobs=2)
-            res = multi_work(tasks)
-            print("try",res)
-            
             for ensemble_index in range(self.ensemble_num):
                 q_value_for_a_head = self.q_value_for_a_head(state, action, ensemble_index)
                 if q_value_for_a_head < worst_Q_value:
                     worst_Q_value = q_value_for_a_head
-                
-            worst_Q_list.append(worst_Q_value)
+            worst_Q_list.append(worst_Q_value)       
 
         return worst_Q_list
 
     def q_value_for_a_head(self, state, action, ensemble_index):
         g_value_list = []
         for i in range(self.rollout_times):
-            # time1 = time.time()
-            ego_trajectory, rollout_trajectory = self.ensemble_transition_model.rollout(state, action, ensemble_index)
-            # time2 = time.time()
+            time1 = time.time()
+            ego_trajectory, rollout_trajectory = self.ensemble_transition_model.rollout_jit_acc(state, action, ensemble_index)
+            time2 = time.time()
             self.rollout_trajectory_tuple.append(rollout_trajectory)
             g_value = self.calculate_g_value(ego_trajectory, rollout_trajectory)
-            # time3 = time.time()
-
+            time3 = time.time()
             # print("time_consume",time3-time2 , time2-time1)  
 
             g_value_list.append(g_value)
@@ -146,7 +239,15 @@ class DCP_Agent():
         return q_value
         
     def calculate_g_value(self, ego_trajectory, rollout_trajectory): 
-        if self.colli_check(ego_trajectory, rollout_trajectory):
+        # ego_x_list = numba.typed.List(ego_trajectory[0].x)
+        # ego_y_list = numba.typed.List(ego_trajectory[0].y)
+        # ego_yaw_list = numba.typed.List(ego_trajectory[0].yaw)
+        ego_x_list = np.array(ego_trajectory[0].x)
+        ego_y_list = np.array(ego_trajectory[0].y)
+        ego_yaw_list = np.array(ego_trajectory[0].yaw)
+        rollout_trajectory = np.array(rollout_trajectory)
+        
+        if _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, self.future_frame, self.move_gap, self.check_radius):
             g_colli = -500
         else:
             g_colli = 0
@@ -249,7 +350,7 @@ class DCP_Transition_Model():
         self.rollout_times = 30   
 
     def rollout(self, state, candidate_trajectory, ensemble_index):
-
+    
         if ensemble_index > self.ensemble_num-1:
             print("[Warning]: Ensemble Index out of index!")
             return None
@@ -270,13 +371,18 @@ class DCP_Transition_Model():
         predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
         predict_action = predict_action.cpu().detach().numpy()
         
+        time1 = time.time()
 
         for j in range(1, vehicle_num):  # exclude ego vehicle
-            one_path = Frenet_path()
-            one_path.t = [t for t in np.arange(0.0, 0.1 * self.future_frame, 0.1)]
-            one_path.c = j  # use the c to indicate which vehicle
-            one_path.cd = ensemble_index  # use the cd to indicate which ensemble model
-            one_path.cf = self.ensemble_num  # use the cf to indicate heads num
+            # one_path = Frenet_path()
+            # one_path.t = [t for t in np.arange(0.0, 0.1 * self.future_frame, 0.1)]
+            # one_path.c = j  # use the c to indicate which vehicle
+            # one_path.cd = ensemble_index  # use the cd to indicate which ensemble model
+            # one_path.cf = self.ensemble_num  # use the cf to indicate heads num
+            path = []
+            x_list = []
+            y_list = []
+            yaw_list = []
             x = obs[j][0]
             y = obs[j][1]
             velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
@@ -287,15 +393,59 @@ class DCP_Transition_Model():
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(x, y, yaw, velocity, throttle, delta)
                 # print("vehicle model",j*2*self.future_frame + 2*k)
                 # print("vehicle model",x, y, yaw,throttle, delta)
-                one_path.x.append(x)
-                one_path.y.append(y)
-                one_path.yaw.append(yaw)
-            # paths_of_one_model.append(one_path)
-            rollout_trajectory.append(one_path)
+                # one_path.x.append(x)
+                # one_path.y.append(y)
+                # one_path.yaw.append(yaw)
+                x_list.append(x)
+                y_list.append(y)
+                yaw_list.append(yaw)
+                
+            path.append(x_list)
+            path.append(y_list)
+            path.append(yaw_list)
+            rollout_trajectory.append(path)
 
+        time2 = time.time()
+        # print("time",time2-time1)
+
+    
         ego_trajectory = candidate_trajectory
 
         
+        return ego_trajectory, rollout_trajectory
+    
+    def rollout_jit_acc(self, state, candidate_trajectory, ensemble_index):
+        time1 = time.time()
+
+        if ensemble_index > self.ensemble_num-1:
+            print("[Warning]: Ensemble Index out of index!")
+            return None
+        
+        rollout_trajectory = []
+        history_obs = state
+        obs = history_obs[-1]
+        
+
+        vehicle_num = 0
+        for i in range(len(history_obs[0])):
+            if history_obs[0][i][0] != -999: # use -100 as signal, very unstable
+                vehicle_num += 1
+
+        history_obs = self.normalize_state(history_obs)        
+        history_obs = torch.tensor(history_obs).to(self.device)
+        time2 = time.time()
+
+        predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
+        time3 = time.time()
+
+        predict_action = predict_action.cpu().detach().numpy()
+
+        rollout_trajectory = _kinematic_model(vehicle_num, obs, self.future_frame, predict_action, self.throttle_scale, self.steer_scale)
+
+        time4 = time.time()
+        # print("time_consume",time4-time3, time3-time2 , time2-time1)             
+        ego_trajectory = candidate_trajectory
+
         return ego_trajectory, rollout_trajectory
   
     # transition_training functions
@@ -324,7 +474,7 @@ class DCP_Transition_Model():
                     normalize_obs[i][1] = obs[i][1] - self.obs_bias_y
             normalize_state.append(normalize_obs)
             
-        return (np.array(normalize_state).flatten()/self.obs_scale).tolist() # flatten to list
+        return (np.array(normalize_state).flatten()/self.obs_scale) # flatten to list
     
     def update_model(self):
         if len(self.data) > 0:
@@ -346,7 +496,7 @@ class DCP_Transition_Model():
                     predict_action, sigma = self.ensemble_models[i](history_obs)
                     # print("target_action",target_action[40:80])
                     # print("predict_action",predict_action[40:80])
-                    print("sigma", sigma)
+                    # print("sigma", sigma)
                     # sigma = torch.ones_like(predict_action)
                     diff = (predict_action - target_action) / sigma
                     loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
@@ -431,7 +581,7 @@ class DCP_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.1, b=0.1)
+            nn.init.uniform_(m.weight, a=-0.2, b=0.2)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式

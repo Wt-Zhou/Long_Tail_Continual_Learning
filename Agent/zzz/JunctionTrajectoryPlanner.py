@@ -31,7 +31,7 @@ ONLY_SAMPLE_TO_LEFT = True
 # Cost weights
 KJ = 0.1
 KT = 0.1
-KD = 1.0
+KD = 0.05 #1.0
 KLAT = 1.0
 KLON = 1.0
 KRLS = 1.0
@@ -340,12 +340,20 @@ class JunctionTrajectoryPlanner(object):
                     Jp = sum(np.power(tfp.d_ddd, 2))  # square of jerk
                     Js = sum(np.power(tfp.s_ddd, 2))  # square of jerk
 
-                    # square of diff from target speed
-                    ds = (self.target_speed - tfp.s_d[-1])**2
-
-                    tfp.cd = KJ * Jp + KT * Ti + KD * tfp.d[-1]**2
+                    # original cost
+                    # ds = (self.target_speed - tfp.s_d[-1])**2
+                    # tfp.cd = KJ * Jp + KT * Ti + KD * tfp.d[-1]**2
+                    # tfp.cv = KJ * Js + KT * Ti + KD * ds
+                    
+                    # new cost
+                    tfps = [x- self.target_speed for x in tfp.s_d]
+                    ds = sum(np.power(tfps,2))
+                    dd = sum(np.power(tfp.d,2))
+                    tfp.cd = KJ * Jp + KT * Ti + KD * dd
                     tfp.cv = KJ * Js + KT * Ti + KD * ds
+                    
                     tfp.cf = KLAT * tfp.cd + KLON * tfp.cv
+                    tfp.horizon_cf = KLAT * tfp.cd + KLON * tfp.cv
 
                     frenet_paths.append(tfp)
 

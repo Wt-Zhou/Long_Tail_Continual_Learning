@@ -42,7 +42,17 @@ if __name__ == '__main__':
         # Loop over steps
         while True:
             action = agent.act(obs)
-            new_obs, reward, done, collision_signal = env.step(action)   
+            new_obs, reward, done, collision_signal = env.step(action)  
+            
+            # plot
+            if len(agent.rollout_trajectory_tuple)>0:
+                for rollout_trajectory_head in agent.rollout_trajectory_tuple:
+                    for rollout_trajectory in rollout_trajectory_head:
+                        for i in range(len(rollout_trajectory[0])-1):
+                            env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
+                                                end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
+                                                thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.2)
+    
                 
             obs = new_obs                    
             
