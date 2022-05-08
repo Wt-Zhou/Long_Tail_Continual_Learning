@@ -4,14 +4,11 @@ import os.path as osp
 
 import numpy as np
 import torch
-from Agent.zzz.prediction.coordinates import Coordinates
-from Agent.zzz.prediction.KinematicBicycleModel.kinematic_model import \
-    KinematicBicycleModel
 from rtree import index as rindex
 
 
 class Results():
-    def __init__(self, history_frame, create_new_train_file=True):
+    def __init__(self, history_frame, create_new_train_file=False):
 
         if create_new_train_file:
             if osp.exists("DCP_results/trained_state_index.dat"):
@@ -20,33 +17,33 @@ class Results():
             if osp.exists("DCP_results/trained_state.txt"):
                 os.remove("DCP_results/trained_state.txt")
 
+            self.all_state_list = []
             self.trained_state_counter = 0
             self.test_state_counter = 0
-            self.visited_state_effiency_d = []
-            self.visited_state_effiency_v = []
-            self.visited_state_safety = []
-            self.visited_state_conservative_level = []
-            self.visited_state_performance = []
+            print("Creat New Rtree")
+
+        else:
+            self.all_state_list = np.loadtxt("DCP_results/trained_state.txt").tolist()
+            self.trained_state_counter = len(self.all_state_list)
+            self.test_state_counter = 0
+
+            print("Loaded Saved Rtree, len:",self.trained_state_counter)
             
-        # else:
-            # self.visited_state_effiency_d = np.loadtxt("DCP_results/effiency_d.txt").tolist()
-            # self.visited_state_effiency_v = np.loadtxt("DCP_results/effiency_v.txt").tolist()
-            # self.visited_state_safety = np.loadtxt("DCP_results/safety.txt").tolist()
-            # self.visited_state_conservative_level = np.loadtxt("DCP_results/conservative_level.txt").tolist()
-            # self.visited_state_performance = np.loadtxt("DCP_results/performance.txt").tolist()
-            # self.trained_state_counter = len(self.visited_state_effiency_d)
-
-        self.trained_state_outfile = open("results/trained_state.txt", "a")
         self.trained_state_format = " ".join(("%f",)*(history_frame * 20))+"\n"
-
+        self.trained_state_outfile = open("DCP_results/trained_state.txt", "a")
         trained_state_tree_prop = rindex.Property()
         trained_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
         
-        self.all_state_list = []
         # self.trained_state_dist = np.array([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]])
         self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=1)
-        self.trained_state_tree = rindex.Index('results/trained_state_index',properties=trained_state_tree_prop)
-        self.test_state_tree = rindex.Index('results/test_state_index',properties=trained_state_tree_prop)
+        self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
+        self.test_state_tree = rindex.Index('DCP_results/test_state_index',properties=trained_state_tree_prop)
+        
+        self.visited_state_effiency_d = []
+        self.visited_state_effiency_v = []
+        self.visited_state_safety = []
+        self.visited_state_conservative_level = []
+        self.visited_state_performance = []
 
     def calculate_visited_times(self, state):
         
@@ -57,18 +54,19 @@ class Results():
     def add_training_data(self, his_obs_frames):
         obs = his_obs_frames
         obs = np.array(obs).flatten().tolist()
-        
         self.all_state_list.append(obs)
         self.trained_state_tree.insert(self.trained_state_counter,
             tuple((obs-self.trained_state_dist).tolist()+(obs+self.trained_state_dist).tolist()))
         self.trained_state_outfile.write(self.trained_state_format % tuple(obs))
         self.trained_state_counter += 1
+
     
     def calculate_training_distribution(self):
         self.mark_list = np.zeros(self.trained_state_counter)
         for i in range(self.trained_state_counter):
             if self.mark_list[i] == 0:
                 state = self.all_state_list[i]
+                str_state = str(state) # the state will change after rtree query
                 # mark similar state
                 trained_times = 0#sum(1 for _ in self.trained_state_tree.intersection(state)) #using sum from rtree would lead to repeat problem
 
@@ -77,20 +75,27 @@ class Results():
                         self.mark_list[n] = 1
                         trained_times += 1
                     
-                print("train_data", trained_times)
-  
+                # print("train_data", trained_times)
+
                 # write to txt
                 with open("DCP_results/train_data.txt", 'a') as fw:
-                    fw.write(str(state)) 
+                    fw.write(str_state) 
                     fw.write(", ")
                     fw.write(str(trained_times)) 
                     fw.write("\n")
                     fw.close()               
 
 # 2. Estimated Q-lower bound
+    def sampled_trained_state(self, i):
+        if i < self.trained_state_counter:
+            trained_state = self.all_state_list[i]
+            return trained_state
+        else:
+            return None
+                
     def estimated_q_lower_bound(self, state, candidate_action_index, estimated_q_lower_bound, true_q_value):
         trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) 
-        with open("DCP_results/train_data.txt", 'a') as fw:
+        with open("DCP_results/confidence.txt", 'a') as fw:
                 fw.write(str(state)) 
                 fw.write(", ")
                 fw.write(str(trained_times)) 
@@ -143,9 +148,9 @@ class Results():
         # square of diff from target speed
         ds = (30.0 / 3.6 - trajectory.s_d[0])**2 # target speed
 
-        cd = 0.1 * Jp + 0.1 * 0.1 + 1.0 * trajectory.d[0]**2
-        cv = 0.1 * Js + 0.1 * 0.1 + 1.0 * ds
-        performance = 1.0 * cd + 1.0 * cv
+        cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * trajectory.d[0]**2
+        cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
+        performance = 1.0 * cd + 1.0 * cv - collision * 500
         
         self.visited_state_performance.append(performance)
         

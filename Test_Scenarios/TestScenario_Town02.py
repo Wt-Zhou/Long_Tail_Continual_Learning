@@ -64,8 +64,11 @@ class CarEnv_02_Intersection_fixed:
         self.world = self.client.get_world()
 
         # if self.world.get_map().name != 'Town02':
-        if self.world.get_map().name != 'Carla/Maps/Town02':
-            self.world = self.client.load_world('Town02')
+        if self.world.get_map().name != 'Carla/Maps/Town02_Opt':
+            self.world = self.client.load_world('Town02_Opt')
+            self.world.unload_map_layer(carla.MapLayer.StreetLights)
+            self.world.unload_map_layer(carla.MapLayer.Buildings)
+            # self.world.unload_map_layer(carla.MapLayer.Props)
         self.world.set_weather(carla.WeatherParameters(cloudiness=50, precipitation=10.0, sun_altitude_angle=30.0))
         settings = self.world.get_settings()
         settings.no_rendering_mode = False
@@ -139,7 +142,7 @@ class CarEnv_02_Intersection_fixed:
         self.collision_num = 0
 
         # Case
-        self.init_train_case()
+        self.init_test_case()
         self.case_id = 0
         self.done = False
      
@@ -186,7 +189,7 @@ class CarEnv_02_Intersection_fixed:
         self.ref_path_array = dense_polyline2d(ref_path_ori, 2)
         self.ref_path_tangets = np.zeros(len(self.ref_path_array))
 
-    def ego_vehicle_stuck(self, stay_thres = 2):        
+    def ego_vehicle_stuck(self, stay_thres = 10):        
         ego_vehicle_velocity = math.sqrt(self.ego_vehicle.get_velocity().x ** 2 + self.ego_vehicle.get_velocity().y ** 2 + self.ego_vehicle.get_velocity().z ** 2)
         if ego_vehicle_velocity < 0.1:
             pass
@@ -207,6 +210,8 @@ class CarEnv_02_Intersection_fixed:
 
     def ego_vehicle_collision(self, event):
         self.ego_vehicle_collision_sign = True
+        self.ego_vehicle_collision_actor = event.other_actor
+        print("collision_id", self.ego_vehicle_collision_actor)
 
     def wrap_state(self):
         # state = [0 for i in range((OBSTACLES_CONSIDERED + 1) * 4)]
@@ -369,7 +374,7 @@ class CarEnv_02_Intersection_fixed:
         self.spawn_fixed_veh()
 
         # Ego vehicle
-        self.spawn_ego_veh()
+        self.random_spawn_ego_veh()
         self.world.tick() 
 
         # State
@@ -380,6 +385,81 @@ class CarEnv_02_Intersection_fixed:
         self.task_num += 1
         self.case_id += 1
 
+        return state
+    
+    def reset_with_state(self, trained_state):
+        
+        # Ego vehicle
+        if self.ego_vehicle is not None:
+            try:
+                self.ego_collision_sensor.destroy()
+                self.ego_vehicle.destroy()
+            except:
+                pass
+            
+        ego_state = Transform()
+        ego_state.location.x = trained_state[0]
+        ego_state.location.y = trained_state[1]
+        ego_state.location.z = 0.5
+        ego_state.rotation.pitch = 0
+        ego_state.rotation.yaw = trained_state[4] * 180.0 / math.pi
+        ego_state.rotation.roll = 0    
+        
+        # if ego_state.location.x < 134 and ego_state.location.x > 130:
+        #     if ego_state.location.y < 210 and ego_state.location.y > 202:
+        #         return None
+            
+        if ego_state.location.x < 146 and ego_state.location.x > 143:
+            if ego_state.location.y < 188 and ego_state.location.y > 185:
+                return None
+        
+        try:
+            self.ego_vehicle = self.world.spawn_actor(self.ego_vehicle_bp, ego_state)
+            self.ego_collision_sensor = self.world.spawn_actor(self.ego_collision_bp, Transform(), self.ego_vehicle, carla.AttachmentType.Rigid)
+            self.ego_collision_sensor.listen(lambda event: self.ego_vehicle_collision(event))
+            self.ego_vehicle_collision_sign = False
+        except:
+            self.ego_vehicle = None
+            return None
+
+        
+        # Agents
+        SpawnActor = carla.command.SpawnActor
+        SetAutopilot = carla.command.SetAutopilot
+        FutureActor = carla.command.FutureActor
+        synchronous_master = True
+        actor_list = self.world.get_actors()
+        vehicle_list = actor_list.filter("*vehicle*")
+        for vehicle in vehicle_list:
+            if vehicle.attributes['role_name'] != "hero" :
+                vehicle.destroy()
+
+        batch = []
+        print("Case_id",self.case_id)
+
+        for i in range(1,3):
+            transform = Transform()
+            transform.location.x = trained_state[5*i]
+            transform.location.y = trained_state[5*i+1]
+            transform.location.z = 0.5
+            transform.rotation.pitch = 0
+            transform.rotation.yaw = trained_state[5*i+4] * 180.0 / math.pi
+            transform.rotation.roll = 0    
+            batch.append(SpawnActor(self.env_vehicle_bp, transform).then(SetAutopilot(FutureActor, True)))
+    
+        self.client.apply_batch_sync(batch, synchronous_master)
+
+        actor_list = self.world.get_actors()
+        vehicle_list = actor_list.filter("*vehicle*")
+        for vehicle in vehicle_list:  
+            self.tm.ignore_signs_percentage(vehicle, 100)
+            self.tm.ignore_lights_percentage(vehicle, 100)
+            self.tm.ignore_walkers_percentage(vehicle, 0)
+        
+        self.world.tick() 
+
+        # State
+        state = self.wrap_state_as_list()
         return state
 
     def step(self, action):
@@ -487,36 +567,16 @@ class CarEnv_02_Intersection_fixed:
                 spawn_vehicles.append(transform)
                 self.case_list.append(spawn_vehicles)
 
-        # long tail case
-        # spawn_vehicles = []
-        # # transform = Transform()
-        # # transform.location.x = 125 
-        # # transform.location.y = 187.8
-        # # transform.location.z = 1
-        # # transform.rotation.pitch = 0
-        # # transform.rotation.yaw = 180
-        # # transform.rotation.roll = 0
-        # # spawn_vehicles.append(transform)
-        # transform = Transform()
-        # transform.location.x = 140 
-        # transform.location.y = 192
-        # transform.location.z = 1
-        # transform.rotation.pitch = 0
-        # transform.rotation.yaw = -70
-        # transform.rotation.roll = 0
-        # spawn_vehicles.append(transform)
-        # self.case_list.append(spawn_vehicles)
-
         print("How many Cases?",len(self.case_list))
         
     def init_test_case(self):
         self.case_list = []
 
         # one vehicle from left
-        for i in range(0,10):
+        for i in range(0,20):
             spawn_vehicles = []
             transform = Transform()
-            transform.location.x = 120 + i * 0.3
+            transform.location.x = 120 + i * 0.15
             transform.location.y = 191.8
             transform.location.z = 1
             transform.rotation.pitch = 0
@@ -530,7 +590,7 @@ class CarEnv_02_Intersection_fixed:
             for j in range(0,10):
                 spawn_vehicles = []
                 transform = Transform()
-                transform.location.x = 140 #- i * 0.4 
+                transform.location.x = 125 - i * 0.4 
                 transform.location.y = 188
                 transform.location.z = 1
                 transform.rotation.pitch = 0
@@ -538,7 +598,7 @@ class CarEnv_02_Intersection_fixed:
                 transform.rotation.roll = 0
                 spawn_vehicles.append(transform)
                 transform = Transform()
-                transform.location.x = 122# + j * 0.4
+                transform.location.x = 122 + j * 0.4
                 transform.location.y = 191.8
                 transform.location.z = 1
                 transform.rotation.pitch = 0
@@ -552,7 +612,7 @@ class CarEnv_02_Intersection_fixed:
             for j in range(0,10):
                 spawn_vehicles = []
                 transform = Transform()
-                transform.location.x = 125 + i * 0.4 
+                transform.location.x = 125 - i * 0.4 
                 transform.location.y = 188
                 transform.location.z = 1
                 transform.rotation.pitch = 0
@@ -640,6 +700,26 @@ class CarEnv_02_Intersection_fixed:
             
     def spawn_ego_veh(self):
         global start_point
+        if self.ego_vehicle is not None:
+            self.ego_collision_sensor.destroy()
+            self.ego_vehicle.destroy()
+
+        self.ego_vehicle = self.world.spawn_actor(self.ego_vehicle_bp, start_point)
+        self.ego_collision_sensor = self.world.spawn_actor(self.ego_collision_bp, Transform(), self.ego_vehicle, carla.AttachmentType.Rigid)
+        self.ego_collision_sensor.listen(lambda event: self.ego_vehicle_collision(event))
+        self.ego_vehicle_collision_sign = False
+        
+    def random_spawn_ego_veh(self):
+      
+        start_point = Transform()
+        start_point.location.x = 150 - random.randint(0,20)
+        start_point.location.y = 187
+        start_point.location.z = 0.5
+        start_point.rotation.pitch = 0
+        start_point.rotation.yaw = 180
+        start_point.rotation.roll = 0
+        
+            
         if self.ego_vehicle is not None:
             self.ego_collision_sensor.destroy()
             self.ego_vehicle.destroy()

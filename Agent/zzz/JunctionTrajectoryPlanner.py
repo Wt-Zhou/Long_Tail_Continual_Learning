@@ -12,8 +12,8 @@ from Agent.zzz.tools import *
 MAX_SPEED = 50.0 / 3.6  # maximum speed [m/s]
 MAX_ACCEL = 10.0  # maximum acceleration [m/ss]
 MAX_CURVATURE = 500.0  # maximum curvature [1/m]
-MAX_ROAD_WIDTH = 3.0   # maximum road width [m] # related to RL action space
-D_ROAD_W = 1.5  # road width sampling length [m]
+MAX_ROAD_WIDTH = 2.6   # maximum road width [m] # related to RL action space
+D_ROAD_W = 1.3  # road width sampling length [m]
 DT = 0.1  # time tick [s]
 MAXT = 3.01  # max prediction time [m]
 MINT = 3.0  # min prediction time [m]
@@ -58,6 +58,9 @@ class JunctionTrajectoryPlanner(object):
         self.move_gap = MOVE_GAP
         self.target_speed = TARGET_SPEED
         self.dts = D_T_S
+        self.mint = MINT
+        self.maxt = MAXT
+        self.dt = DT
         
         # initialize prediction module
         # self.obs_prediction = Prediction(OBSTACLES_CONSIDERED, MAXT, DT, self.radius, RADIUS_SPEED_RATIO, self.move_gap)
@@ -316,7 +319,7 @@ class JunctionTrajectoryPlanner(object):
         for di in np.arange(-MAX_ROAD_WIDTH, left_sample_bound+0.1, D_ROAD_W):
 
             # Lateral motion planning
-            for Ti in np.arange(MINT, MAXT, DT):
+            for Ti in np.arange(self.mint, self.maxt, self.dt):
                 fp = Frenet_path()
 
                 lat_qp = quintic_polynomial(c_d, c_d_d, c_d_dd, di, 0.0, 0.0, Ti) 
@@ -353,8 +356,7 @@ class JunctionTrajectoryPlanner(object):
                     tfp.cv = KJ * Js + KT * Ti + KD * ds
                     
                     tfp.cf = KLAT * tfp.cd + KLON * tfp.cv
-                    tfp.horizon_cf = KLAT * tfp.cd + KLON * tfp.cv
-
+                    
                     frenet_paths.append(tfp)
 
         return frenet_paths

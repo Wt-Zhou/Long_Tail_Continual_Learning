@@ -33,11 +33,10 @@ EPISODES=62
 
 
 @jit(nopython=True)
-def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale, steer_scale):
+def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale, steer_scale, dt):
     # vehicle model parameter
     wheelbase = 2.96
-    max_steer = np.deg2rad(90)
-    dt = 0.1
+    max_steer = np.deg2rad(45)
     c_r = 0.01
     c_a = 0.05
 
@@ -50,9 +49,9 @@ def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale
         yaw = obs[j][4]
         
         path = []
-        x_list = []
-        y_list = []
-        yaw_list = []
+        x_list = [x]
+        y_list = [y]
+        yaw_list = [yaw]
     
         for k in range(future_frame):
             throttle = action_list[j*2*future_frame + 2*k] * throttle_scale
@@ -60,7 +59,7 @@ def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale
             f_load = velocity * (c_r + c_a * velocity)
 
             velocity += (dt) * (throttle - f_load)
-            if velocity <= -5:
+            if velocity <= 0:
                 velocity = 0
             
             # Compute the radius and angular velocity of the kinematic bicycle model
@@ -134,12 +133,6 @@ class DCP_Agent():
     def __init__(self, env, training=False):
         self.env = env
         
-        # basic component
-        self.trajectory_planner = JunctionTrajectoryPlanner()
-        self.controller = Controller()
-        self.dynamic_map = DynamicMap()
-        self.dynamic_map.update_ref_path(self.env)
-        
         # transition model parameter        
         self.ensemble_num = 20
         self.history_frame = 1
@@ -152,6 +145,7 @@ class DCP_Agent():
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         self.rollout_times = 1
+        self.dt = 0.1
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.set_default_tensor_type(torch.DoubleTensor)
@@ -160,13 +154,21 @@ class DCP_Agent():
                                                               self.future_frame, self.agent_dimension, self.agent_num,
                                                               self.obs_bias_x, self.obs_bias_y, self.obs_scale, 
                                                               self.throttle_scale, self.steer_scale, 
-                                                              self.device, training)
+                                                              self.device, training, self.dt)
         self.history_obs_list = []
         self.rollout_trajectory_tuple = []
         
+        # basic component
+        self.trajectory_planner = JunctionTrajectoryPlanner()
+        assert self.future_frame * self.trajectory_planner.dt <= self.trajectory_planner.mint,"The trajectory is shorter than the agents' horizon!"
+        assert self.dt == self.trajectory_planner.dt,"Trajectory planner dt is not equal to DCP agent!"
+        self.controller = Controller()
+        self.dynamic_map = DynamicMap()
+        self.dynamic_map.update_ref_path(self.env)
+        
         # collision checking parameter
-        self.robot_radius = 1
-        self.move_gap = 1
+        self.robot_radius = 4.0
+        self.move_gap = 1.5
         self.check_radius = self.robot_radius
         
     def act(self, obs):
@@ -252,7 +254,18 @@ class DCP_Agent():
         else:
             g_colli = 0
  
-        g_ego = -ego_trajectory[1] # fp.cf
+        # g_ego = -ego_trajectory[1] # fp.cf # cost of whole trajectory
+        # cost of consider horizon
+        Jp = sum(np.power(ego_trajectory[0].d_ddd[0:self.future_frame], 2))
+        Js = sum(np.power(ego_trajectory[0].s_ddd[0:self.future_frame], 2))
+
+        tfps = [self.trajectory_planner.target_speed-x for x in ego_trajectory[0].s_d[0:self.future_frame]]
+        ds = sum(np.power(tfps, 2))
+        dd = sum(np.power(ego_trajectory[0].d[0:self.future_frame], 2))
+
+        cd = 0.1 * Jp + 0.1 * 0.1 * self.future_frame + 0.05 * dd
+        cv = 0.1 * Js + 0.1 * 0.1 * self.future_frame + 0.05 * ds
+        g_ego = -(1.0 * cd + 1.0 * cv)
         g_value = g_colli + g_ego
         
         return g_value
@@ -302,7 +315,7 @@ class DCP_Agent():
        
 class DCP_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_bias_x, obs_bias_y, 
-                 obs_scale, throttle_scale, steer_scale, device, training):
+                 obs_scale, throttle_scale, steer_scale, device, training, dt):
         super(DCP_Transition_Model, self).__init__()
         
         self.ensemble_num = ensemble_num
@@ -335,7 +348,7 @@ class DCP_Transition_Model():
         # transition vehicle model
         self.wheelbase = 2.96
         self.max_steer = np.deg2rad(80)
-        self.dt = 0.1
+        self.dt = dt
         self.c_r = 0.01
         self.c_a = 0.05
         self.kbm = KinematicBicycleModel(
@@ -440,7 +453,8 @@ class DCP_Transition_Model():
 
         predict_action = predict_action.cpu().detach().numpy()
 
-        rollout_trajectory = _kinematic_model(vehicle_num, obs, self.future_frame, predict_action, self.throttle_scale, self.steer_scale)
+        rollout_trajectory = _kinematic_model(vehicle_num, obs, self.future_frame, predict_action, self.throttle_scale, 
+                                              self.steer_scale, self.dt)
 
         time4 = time.time()
         # print("time_consume",time4-time3, time3-time2 , time2-time1)             
@@ -581,7 +595,7 @@ class DCP_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.2, b=0.2)
+            nn.init.uniform_(m.weight, a=-0.5, b=0.5)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式

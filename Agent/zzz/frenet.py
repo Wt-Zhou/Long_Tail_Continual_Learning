@@ -13,7 +13,6 @@ class Frenet_path:
         self.cd = 0.0
         self.cv = 0.0
         self.cf = 0.0
-        self.horizon_cf = 0.0
 
         self.x = []
         self.y = []
