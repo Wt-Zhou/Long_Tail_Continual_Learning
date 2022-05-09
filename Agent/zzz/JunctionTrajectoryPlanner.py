@@ -140,11 +140,12 @@ class JunctionTrajectoryPlanner(object):
             # print("[CP]:----> Brake") 
             generated_trajectory =  self.all_trajectory[0][0]
             trajectory_array = np.c_[generated_trajectory.x, generated_trajectory.y]
-            trajectory_action = TrajectoryAction(trajectory_array, [0] * len(trajectory_array))
+            trajectory_action = TrajectoryAction(trajectory_array, [0] * len(trajectory_array), generated_trajectory)
+            trajectory_action.original_trajectory.cf = 500
+            trajectory_action.original_trajectory.s_d = [0] * len(trajectory_array)
             return trajectory_action          
             
-        fplist = self.all_trajectory  
-        bestpath = fplist[int(DCP_action - 1)][0]
+        bestpath = self.all_trajectory[int(DCP_action - 1)][0]
         bestpath.s_d
         trajectory_array = np.c_[bestpath.x, bestpath.y]
         
@@ -153,7 +154,7 @@ class JunctionTrajectoryPlanner(object):
             self.last_trajectory_array_rule = trajectory_array
             self.last_trajectory_rule = bestpath 
 
-        trajectory_action = TrajectoryAction(trajectory_array, bestpath.s_d[:len(trajectory_array)])
+        trajectory_action = TrajectoryAction(trajectory_array, bestpath.s_d[:len(trajectory_array)], bestpath)
         # print("[CP]: ------> CP Successful Planning")           
         return trajectory_action
 

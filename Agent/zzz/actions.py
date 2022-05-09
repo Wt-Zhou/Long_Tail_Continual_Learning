@@ -6,9 +6,10 @@ class LaneAction(object):
 
 class TrajectoryAction(object):
 
-    def __init__(self, trajectory=None, desired_speed=None):
+    def __init__(self, trajectory=None, desired_speed=None, original_trajectory=None):
         self.trajectory = trajectory
         self.desired_speed = desired_speed
+        self.original_trajectory = original_trajectory
 
 class ControlAction(object):
 

@@ -167,7 +167,7 @@ class DCP_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        self.robot_radius = 4.0
+        self.robot_radius = 2.5
         self.move_gap = 1.5
         self.check_radius = self.robot_radius
         

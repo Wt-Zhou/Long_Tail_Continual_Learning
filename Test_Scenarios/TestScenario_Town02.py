@@ -64,8 +64,9 @@ class CarEnv_02_Intersection_fixed:
         self.world = self.client.get_world()
 
         # if self.world.get_map().name != 'Town02':
-        if self.world.get_map().name != 'Carla/Maps/Town02_Opt':
-            self.world = self.client.load_world('Town02_Opt')
+        if self.world.get_map().name != 'Carla/Maps/Town02':
+            self.world = self.client.load_world('Town02')
+            # self.world = self.client.load_world('Town02_Opt')
             self.world.unload_map_layer(carla.MapLayer.StreetLights)
             self.world.unload_map_layer(carla.MapLayer.Buildings)
             # self.world.unload_map_layer(carla.MapLayer.Props)
@@ -374,7 +375,7 @@ class CarEnv_02_Intersection_fixed:
         self.spawn_fixed_veh()
 
         # Ego vehicle
-        self.random_spawn_ego_veh()
+        self.spawn_ego_veh()
         self.world.tick() 
 
         # State

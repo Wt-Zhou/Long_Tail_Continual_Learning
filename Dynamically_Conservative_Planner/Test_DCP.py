@@ -5,6 +5,7 @@ import sys
 
 sys.path.append("..")
 
+import copy
 import math
 import random
 import time
@@ -17,8 +18,9 @@ from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
 from DCP_Agent.Agent import DCP_Agent
+from results import Results
 
-TEST_EPISODES = 10000
+TEST_EPISODES = 220
 LOAD_STEP = 10
 
 if __name__ == '__main__':
@@ -53,15 +55,13 @@ if __name__ == '__main__':
             if len(agent.history_obs_list) >= agent.history_frame:
                 worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
                 dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
-                
-                # fixed action:
-                dcp_action = np.array([1])
-                
+                               
                 estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
 
                 print("worst_Q_list",worst_Q_list)
                 print("dcp_action",dcp_action)
                 state = np.array(agent.history_obs_list).flatten().tolist() # for record
+                temp_obs = copy.deepcopy(agent.history_obs_list)
                 agent.history_obs_list.pop(0)
 
             else:
@@ -73,7 +73,7 @@ if __name__ == '__main__':
             action = [control_action.acc , control_action.steering]
             
             new_obs, reward, done, collision = env.step(action)  
-            result.add_test_data(agent.history_obs_list, candidate_trajectories_tuple, dcp_trajectory, collision)
+            result.add_test_data(temp_obs, candidate_trajectories_tuple, dcp_trajectory.original_trajectory, collision)
  
             agent.dynamic_map.update_map_from_list_obs(new_obs)
             obs = new_obs

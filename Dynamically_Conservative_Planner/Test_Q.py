@@ -19,7 +19,7 @@ from tqdm import tqdm
 from DCP_Agent.Agent import DCP_Agent
 from results import Results
 
-TEST_EPISODES = 5000
+TEST_EPISODES = 80000
 LOAD_STEP = 80000
 ROLLOUT_TIMES = 5
 
@@ -65,7 +65,7 @@ if __name__ == '__main__':
                 dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
                 
                 # fixed action:
-                dcp_action = np.array([4])
+                dcp_action = np.array([6])
                 
                 estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
 

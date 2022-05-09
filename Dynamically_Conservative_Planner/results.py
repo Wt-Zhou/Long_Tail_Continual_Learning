@@ -31,14 +31,18 @@ class Results():
             
         self.trained_state_format = " ".join(("%f",)*(history_frame * 20))+"\n"
         self.trained_state_outfile = open("DCP_results/trained_state.txt", "a")
+        self.test_state_outfile = open("DCP_results/test_state.txt", "a")
         trained_state_tree_prop = rindex.Property()
+        test_state_tree_prop = rindex.Property()
         trained_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
+        test_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
         
         # self.trained_state_dist = np.array([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]])
         self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=1)
         self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
-        self.test_state_tree = rindex.Index('DCP_results/test_state_index',properties=trained_state_tree_prop)
+        self.test_state_tree = rindex.Index('DCP_results/test_state_index',properties=test_state_tree_prop)
         
+        self.all_test_state_list = []
         self.visited_state_effiency_d = []
         self.visited_state_effiency_v = []
         self.visited_state_safety = []
@@ -60,7 +64,6 @@ class Results():
         self.trained_state_outfile.write(self.trained_state_format % tuple(obs))
         self.trained_state_counter += 1
 
-    
     def calculate_training_distribution(self):
         self.mark_list = np.zeros(self.trained_state_counter)
         for i in range(self.trained_state_counter):
@@ -114,12 +117,11 @@ class Results():
         
         obs = his_obs_frames
         obs = np.array(obs).flatten().tolist()
-
-        self.all_state_list.append(obs)
+        self.all_test_state_list.append(obs)
       
         self.test_state_tree.insert(self.test_state_counter,
-            tuple((obs-self.visited_state_dist).tolist()+(obs+self.visited_state_dist).tolist()))
-        self.test_state_tree.write(self.visited_state_format % tuple(obs))
+            tuple((obs-self.trained_state_dist).tolist()+(obs+self.trained_state_dist).tolist()))
+        self.test_state_outfile.write(self.trained_state_format % tuple(obs))
         self.test_state_counter += 1
         
         # safety metrics
@@ -150,26 +152,28 @@ class Results():
 
         cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * trajectory.d[0]**2
         cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
-        performance = 1.0 * cd + 1.0 * cv - collision * 500
+        performance = -1.0 * cd - 1.0 * cv - collision * 500
         
         self.visited_state_performance.append(performance)
         
         # conservative level
-        sorted_fplist = sorted(candidate_trajectories_tuple, key=lambda path_tuples: candidate_trajectories_tuple[1])
+        sorted_fplist = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
         min_cost = sorted_fplist[0][1]
         conservative_level = trajectory.cf/min_cost
         self.visited_state_conservative_level.append(conservative_level)               
         return None
     
     def calculate_performance_metrics(self):
-        self.mark_list = np.zeros(self.trained_state_counter)
-        for i in range(self.trained_state_counter):
+        self.mark_list = np.zeros(self.test_state_counter)
+        for i in range(self.test_state_counter-1):
             if self.mark_list[i] == 0:
-                state = self.all_state_list[i]
+                state = self.all_test_state_list[i]
                 # mark similar state
                 state_effiency_v = 0
                 state_effiency_d = 0
                 state_safety = 0
+                state_conservative_level = 0
+                state_performance = 0
                 trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) #using sum from rtree would lead to repeat problem
                 visited_times = 0
                 for n in self.test_state_tree.intersection(state):
@@ -188,10 +192,9 @@ class Results():
                 state_conservative_level /= visited_times
                 state_performance /= visited_times
                 
-                print("results", trained_times, state_effiency_d, state_effiency_v, state_safety)
-  
+                print("results", trained_times, state_performance, state_conservative_level, state_safety, state_effiency_d, state_effiency_v)
                 # write to txt
-                with open("results.txt", 'a') as fw:
+                with open("DCP_results/DCP_performance.txt", 'a') as fw:
                     fw.write(str(state)) 
                     fw.write(", ")
                     fw.write(str(trained_times)) 
