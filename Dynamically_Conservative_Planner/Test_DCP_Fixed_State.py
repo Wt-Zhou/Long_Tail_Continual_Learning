@@ -5,6 +5,7 @@ import sys
 
 sys.path.append("..")
 
+import copy
 import math
 import random
 import time
@@ -14,19 +15,21 @@ import gym
 import matplotlib.pyplot as plt
 import numpy as np
 from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
+from Test_Scenarios.TestScenario_Town02_Fixed_State import \
+    CarEnv_02_Intersection_fixed_state
 from tqdm import tqdm
 
 from DCP_Agent.Agent import DCP_Agent
 from results import Results
 
-TEST_EPISODES = 80000
+TEST_EPISODES = 50
 LOAD_STEP = 80000
-ROLLOUT_TIMES = 5
+ROLLOUT_TIMES = 10
 
 if __name__ == '__main__':
 
     # Create environment 
-    env = CarEnv_02_Intersection_fixed()
+    env = CarEnv_02_Intersection_fixed_state()
 
     # Create Agent
     agent = DCP_Agent(env)
@@ -37,24 +40,24 @@ if __name__ == '__main__':
     result.clear_old_test_data()
     
     # Loop over episodes
-    for episode in tqdm(range(170, TEST_EPISODES + 1), unit='episodes'):
+    for episode in tqdm(range(1, TEST_EPISODES + 1), unit='episodes'):
         
         print('Restarting episode')
-        # obs = env.reset()
+        obs = env.reset()
 
-        trained_state = result.sampled_trained_state(episode)
-        
-        obs = env.reset_with_state(trained_state)
+        # trained_state = result.sampled_trained_state(episode)
+        # obs = env.reset_with_state(trained_state)
         if obs is None:
             continue
         done = False
                 
         # Loop over steps
         true_q_value = []
+        safety = []
+        efficiency = []
 
         for i in range(ROLLOUT_TIMES):
 
-            print("obs",obs)
             obs = np.array(obs)
             agent.dynamic_map.update_map_from_list_obs(obs)
             candidate_trajectories_tuple = agent.trajectory_planner.generate_candidate_trajectories(agent.dynamic_map)
@@ -64,10 +67,6 @@ if __name__ == '__main__':
             if len(agent.history_obs_list) >= agent.history_frame:
                 worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
                 dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
-                
-                # fixed action:
-                dcp_action = np.array([8])
-                
                 estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
 
                 print("worst_Q_list",worst_Q_list)
@@ -81,12 +80,16 @@ if __name__ == '__main__':
             dcp_trajectory = agent.trajectory_planner.trajectory_update_CP(dcp_action)
             
             g_value = 0
+            non_colli = 1
+            trajectory = candidate_trajectories_tuple[dcp_action[0]-1][0]
+            efficiency = np.mean(trajectory.s_d)
+
+
             for i in range(agent.future_frame):
                 control_action =  agent.controller.get_control(agent.dynamic_map,  dcp_trajectory.trajectory, dcp_trajectory.desired_speed)
                 action = [control_action.acc , control_action.steering]
                 
                 # reward calculation: assume that the ego vehicle will precisely follow trajectory
-                trajectory = candidate_trajectories_tuple[dcp_action[0]-1][0]
                 Jp = trajectory.d_ddd[i]**2 
                 Js = trajectory.s_ddd[i]**2
                 ds = (30.0 / 3.6 - trajectory.s_d[i])**2 # target speed
@@ -99,23 +102,41 @@ if __name__ == '__main__':
                 if done:
                     if collision == True:
                         g_value -= 500
+                        non_colli = 0
                     break
                     
             time.sleep(0.1)
             true_q_value.append(g_value)
+            safety.append(non_colli)
+            
             agent.clear_buff()
             obs = env.reset_with_state(trained_state)
             if obs is None:
                 break
-
             
         true_q_value = np.mean(true_q_value)
+        safety = np.mean(safety)
+        
         print("estimated_q_lower_bound", estimated_q_lower_bound)
         print("true_q_value", true_q_value)
-        result.estimated_q_lower_bound(state, dcp_action, estimated_q_lower_bound, true_q_value)
+        print("safety", safety)
+        print("efficiency", efficiency)
+        result.record_dcp_performance(state, dcp_action, estimated_q_lower_bound, true_q_value, 
+                                      safety, efficiency)
         
 
          
             
+
+    
+            
+            
+            
+            
+            
+            
+
+    
+
 
     

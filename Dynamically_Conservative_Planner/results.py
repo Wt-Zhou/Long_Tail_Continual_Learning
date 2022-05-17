@@ -29,6 +29,8 @@ class Results():
 
             print("Loaded Saved Rtree, len:",self.trained_state_counter)
             
+
+
         self.trained_state_format = " ".join(("%f",)*(history_frame * 20))+"\n"
         self.trained_state_outfile = open("DCP_results/trained_state.txt", "a")
         self.test_state_outfile = open("DCP_results/test_state.txt", "a")
@@ -48,6 +50,7 @@ class Results():
         self.visited_state_safety = []
         self.visited_state_conservative_level = []
         self.visited_state_performance = []
+        self.visited_state_q_bound = []
 
     def calculate_visited_times(self, state):
         
@@ -113,7 +116,14 @@ class Results():
                 
                 
 # 3. Estimate DCP Performance
-    def add_test_data(self, his_obs_frames, candidate_trajectories_tuple, trajectory, collision):    
+    def clear_old_test_data(self):
+        if osp.exists("DCP_results/test_state_index.dat"):
+            os.remove("DCP_results/test_state_index.dat")
+            os.remove("DCP_results/test_state_index.idx")
+        if osp.exists("DCP_results/test_state.txt"):
+            os.remove("DCP_results/test_state.txt")
+    
+    def add_test_data(self, his_obs_frames, candidate_trajectories_tuple, trajectory, collision, estimated_q_lower_bound):    
         
         obs = his_obs_frames
         obs = np.array(obs).flatten().tolist()
@@ -155,6 +165,7 @@ class Results():
         performance = -1.0 * cd - 1.0 * cv - collision * 500
         
         self.visited_state_performance.append(performance)
+        self.visited_state_q_bound.append(estimated_q_lower_bound)
         
         # conservative level
         sorted_fplist = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
@@ -165,6 +176,9 @@ class Results():
     
     def calculate_performance_metrics(self):
         self.mark_list = np.zeros(self.test_state_counter)
+        print("len",len(self.all_test_state_list))
+        print("len",len(self.mark_list))
+        print("self.test_state_counter",self.test_state_counter)
         for i in range(self.test_state_counter-1):
             if self.mark_list[i] == 0:
                 state = self.all_test_state_list[i]
@@ -174,6 +188,7 @@ class Results():
                 state_safety = 0
                 state_conservative_level = 0
                 state_performance = 0
+                state_q_bound = 0
                 trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) #using sum from rtree would lead to repeat problem
                 visited_times = 0
                 for n in self.test_state_tree.intersection(state):
@@ -183,6 +198,7 @@ class Results():
                         state_safety += self.visited_state_safety[n]
                         state_conservative_level += self.visited_state_conservative_level[n]
                         state_performance += self.visited_state_performance[n]
+                        state_q_bound += self.visited_state_q_bound[n]
                         self.mark_list[n] = 1
                         visited_times += 1
     
@@ -191,13 +207,16 @@ class Results():
                 state_safety /= visited_times
                 state_conservative_level /= visited_times
                 state_performance /= visited_times
+                state_q_bound /= visited_times
                 
-                print("results", trained_times, state_performance, state_conservative_level, state_safety, state_effiency_d, state_effiency_v)
+                print("results", trained_times, state_performance, state_conservative_level, state_safety, state_effiency_d, state_effiency_v, visited_times)
                 # write to txt
                 with open("DCP_results/DCP_performance.txt", 'a') as fw:
                     fw.write(str(state)) 
                     fw.write(", ")
                     fw.write(str(trained_times)) 
+                    fw.write(", ")
+                    fw.write(str(state_q_bound)) 
                     fw.write(", ")
                     fw.write(str(state_performance)) 
                     fw.write(", ")
@@ -208,8 +227,32 @@ class Results():
                     fw.write(str(state_effiency_d)) 
                     fw.write(", ")
                     fw.write(str(state_effiency_v)) 
+                    fw.write(", ")
+                    fw.write(str(visited_times)) 
                     fw.write("\n")
-                    fw.close()               
+                    fw.close()        
+                               
+
+# 4. Fixed State DCP Performance
+    def record_dcp_performance(self, state, candidate_action_index, estimated_q_lower_bound, true_q_value, 
+                               safety_rate, efficiency):
+        trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) 
+        with open("DCP_results/dcp_performance_fixed_state.txt", 'a') as fw:
+                fw.write(str(state)) 
+                fw.write(", ")
+                fw.write(str(trained_times)) 
+                fw.write(", ")
+                fw.write(str(candidate_action_index)) 
+                fw.write(", ")
+                fw.write(str(estimated_q_lower_bound)) 
+                fw.write(", ")
+                fw.write(str(true_q_value)) 
+                fw.write(", ")
+                fw.write(str(safety_rate)) 
+                fw.write(", ")
+                fw.write(str(efficiency)) 
+                fw.write("\n")
+                fw.close()   
       
 
 # Old functions       

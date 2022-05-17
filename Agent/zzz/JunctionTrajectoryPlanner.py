@@ -12,13 +12,13 @@ from Agent.zzz.tools import *
 MAX_SPEED = 50.0 / 3.6  # maximum speed [m/s]
 MAX_ACCEL = 10.0  # maximum acceleration [m/ss]
 MAX_CURVATURE = 500.0  # maximum curvature [1/m]
-MAX_ROAD_WIDTH = 2.6   # maximum road width [m] # related to RL action space
-D_ROAD_W = 1.3  # road width sampling length [m]
+MAX_ROAD_WIDTH = 3.0   # maximum road width [m] # related to RL action space
+D_ROAD_W = 1.5  # road width sampling length [m]
 DT = 0.1  # time tick [s]
 MAXT = 3.01  # max prediction time [m]
 MINT = 3.0  # min prediction time [m]
 TARGET_SPEED = 30.0 / 3.6  # target speed [m/s]
-D_T_S = 20.0 / 3.6  # target speed sampling length [m/s]
+D_T_S = 25.0 / 3.6  # target speed sampling length [m/s]
 N_S_SAMPLE = 1  # sampling number of target speed
 
 # Collision check

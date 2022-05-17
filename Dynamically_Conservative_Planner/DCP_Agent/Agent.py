@@ -90,7 +90,7 @@ def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale
     return path_list
 
 @jit(nopython=True)
-def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, future_frame, move_gap, check_radius):
+def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, future_frame, move_gap, check_radius, time_expansion_rate):
     
     for i in range(future_frame):
         ego_x = ego_x_list[i]
@@ -114,16 +114,16 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
             obst_back_y = obst_y-np.sin(obst_yaw)*move_gap
             
             d = (ego_front_x - obst_front_x)**2 + (ego_front_y - obst_front_y)**2
-            if d <= check_radius**2: 
+            if d <= (check_radius+j*time_expansion_rate)**2: 
                 return True
             d = (ego_front_x - obst_back_x)**2 + (ego_front_y - obst_back_y)**2
-            if d <= check_radius**2: 
+            if d <= (check_radius+j*time_expansion_rate)**2: 
                 return True
             d = (ego_back_x - obst_front_x)**2 + (ego_back_y - obst_front_y)**2
-            if d <= check_radius**2: 
+            if d <= (check_radius+j*time_expansion_rate)**2: 
                 return True
             d = (ego_back_x - obst_back_x)**2 + (ego_back_y - obst_back_y)**2
-            if d <= check_radius**2: 
+            if d <= (check_radius+j*time_expansion_rate)**2: 
                 return True
             
     return False
@@ -167,9 +167,17 @@ class DCP_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        self.robot_radius = 2.5
-        self.move_gap = 1.5
+        # DCP parameter
+        # self.robot_radius = 2.0
+        # self.move_gap = 1.5
+        # self.time_expansion_rate = 0
+        # conservative baseline parameter
+        self.robot_radius = 5.0 
+        self.move_gap = 4.0
+        self.time_expansion_rate = 1
+        
         self.check_radius = self.robot_radius
+
         
     def act(self, obs):
         
@@ -249,7 +257,7 @@ class DCP_Agent():
         ego_yaw_list = np.array(ego_trajectory[0].yaw)
         rollout_trajectory = np.array(rollout_trajectory)
         
-        if _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, self.future_frame, self.move_gap, self.check_radius):
+        if _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, self.future_frame, self.move_gap, self.check_radius, self.time_expansion_rate):
             g_colli = -500
         else:
             g_colli = 0
