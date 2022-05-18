@@ -19,8 +19,8 @@ from results import Results
 torch.set_printoptions(profile='short')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-TRAIN_EPISODES = 1
-LOAD_STEP = 80000
+TRAIN_EPISODES = 50000
+LOAD_STEP = 0
 
 if __name__ == '__main__':
 
@@ -41,17 +41,21 @@ if __name__ == '__main__':
 
         # Reset environment and get initial state
         obs = env.reset()
+        result.add_training_data(obs)
+
         done = False
                 
         # Loop over steps
-        for i in range(agent.future_frame):
+        for i in range(agent.future_frame+1):
             action = agent.act(obs)
             new_obs, reward, done, collision_signal = env.step(action)       
             obs = new_obs      
+               
+            if i == agent.future_frame+1:
+                done = True
                          
             agent.ensemble_transition_model.add_training_data(new_obs, done)
             agent.ensemble_transition_model.update_model()
-            result.add_training_data(obs)
             
             # plot
             if len(agent.rollout_trajectory_tuple)>0:
@@ -62,7 +66,7 @@ if __name__ == '__main__':
                                                 end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
                                                 thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.2)
             
-            if train_step % 5000 == 0:
+            if train_step % 500 == 0:
                 agent.ensemble_transition_model.save(train_step)
             train_step += 1
 

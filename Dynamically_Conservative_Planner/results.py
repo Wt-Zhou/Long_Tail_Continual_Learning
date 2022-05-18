@@ -40,7 +40,7 @@ class Results():
         test_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
         
         # self.trained_state_dist = np.array([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]])
-        self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=1)
+        self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=0.5)
         self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
         self.test_state_tree = rindex.Index('DCP_results/test_state_index',properties=test_state_tree_prop)
         

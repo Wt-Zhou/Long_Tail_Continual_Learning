@@ -12,21 +12,21 @@ from Agent.zzz.tools import *
 MAX_SPEED = 50.0 / 3.6  # maximum speed [m/s]
 MAX_ACCEL = 10.0  # maximum acceleration [m/ss]
 MAX_CURVATURE = 500.0  # maximum curvature [1/m]
-MAX_ROAD_WIDTH = 3.0   # maximum road width [m] # related to RL action space
-D_ROAD_W = 1.5  # road width sampling length [m]
+MAX_ROAD_WIDTH = 2.0   # maximum road width [m] # related to RL action space
+D_ROAD_W = 2.0  # road width sampling length [m]
 DT = 0.1  # time tick [s]
 MAXT = 3.01  # max prediction time [m]
 MINT = 3.0  # min prediction time [m]
 TARGET_SPEED = 30.0 / 3.6  # target speed [m/s]
-D_T_S = 25.0 / 3.6  # target speed sampling length [m/s]
-N_S_SAMPLE = 1  # sampling number of target speed
+D_T_S = 12.0 / 3.6  # target speed sampling length [m/s]
+N_S_SAMPLE = 2  # sampling number of target speed
 
 # Collision check
 OBSTACLES_CONSIDERED = 4
 ROBOT_RADIUS = 1.0  # robot radius [m]
 RADIUS_SPEED_RATIO = 0 # higher speed, bigger circle
 MOVE_GAP = 1.0
-ONLY_SAMPLE_TO_LEFT = True
+ONLY_SAMPLE_TO_LEFT = False
 
 # Cost weights
 KJ = 0.1
@@ -277,7 +277,7 @@ class JunctionTrajectoryPlanner(object):
         self.all_trajectory = path_tuples
         sorted_fplist = sorted(path_tuples, key=lambda path_tuples: path_tuples[1])
         
-        # print("How many action?",len(sorted_fplist))
+        print("How many action?",len(sorted_fplist))
 
         sorted_fplist = self.check_paths(sorted_fplist)
         t3 = time.time()
@@ -318,7 +318,6 @@ class JunctionTrajectoryPlanner(object):
         else:
             left_sample_bound = MAX_ROAD_WIDTH 
         for di in np.arange(-MAX_ROAD_WIDTH, left_sample_bound+0.1, D_ROAD_W):
-
             # Lateral motion planning
             for Ti in np.arange(self.mint, self.maxt, self.dt):
                 fp = Frenet_path()
@@ -332,7 +331,7 @@ class JunctionTrajectoryPlanner(object):
                 fp.d_ddd = [lat_qp.calc_third_derivative(t) for t in fp.t]
 
                 # Loongitudinal motion planning (Velocity keeping)
-                for tv in np.arange(self.target_speed - self.dts * N_S_SAMPLE, self.target_speed + self.dts * N_S_SAMPLE, self.dts):
+                for tv in np.arange(self.target_speed - self.dts * N_S_SAMPLE, self.target_speed + 1, self.dts):
                     tfp = copy.deepcopy(fp)
                     lon_qp = quartic_polynomial(s0, c_speed, 0.0, tv, 0.0, Ti)
 

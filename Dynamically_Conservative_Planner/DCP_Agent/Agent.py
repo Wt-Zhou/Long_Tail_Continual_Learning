@@ -112,18 +112,17 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
             obst_front_y = obst_y+np.sin(obst_yaw)*move_gap
             obst_back_x = obst_x-np.cos(obst_yaw)*move_gap
             obst_back_y = obst_y-np.sin(obst_yaw)*move_gap
-            
             d = (ego_front_x - obst_front_x)**2 + (ego_front_y - obst_front_y)**2
-            if d <= (check_radius+j*time_expansion_rate)**2: 
+            if d <= (2*check_radius+i*time_expansion_rate)**2: 
                 return True
             d = (ego_front_x - obst_back_x)**2 + (ego_front_y - obst_back_y)**2
-            if d <= (check_radius+j*time_expansion_rate)**2: 
+            if d <= (2*check_radius+i*time_expansion_rate)**2: 
                 return True
             d = (ego_back_x - obst_front_x)**2 + (ego_back_y - obst_front_y)**2
-            if d <= (check_radius+j*time_expansion_rate)**2: 
+            if d <= (2*check_radius+i*time_expansion_rate)**2: 
                 return True
             d = (ego_back_x - obst_back_x)**2 + (ego_back_y - obst_back_y)**2
-            if d <= (check_radius+j*time_expansion_rate)**2: 
+            if d <= (2*check_radius+i*time_expansion_rate)**2: 
                 return True
             
     return False
@@ -134,7 +133,8 @@ class DCP_Agent():
         self.env = env
         
         # transition model parameter        
-        self.ensemble_num = 20
+        self.ensemble_num = 1
+        self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
         self.obs_scale = 10
@@ -168,13 +168,13 @@ class DCP_Agent():
         
         # collision checking parameter
         # DCP parameter
-        # self.robot_radius = 2.0
-        # self.move_gap = 1.5
-        # self.time_expansion_rate = 0
+        self.robot_radius = 1.5
+        self.move_gap = 2.5
+        self.time_expansion_rate = 0.01
         # conservative baseline parameter
-        self.robot_radius = 5.0 
-        self.move_gap = 4.0
-        self.time_expansion_rate = 1
+        # self.robot_radius = 5.0 
+        # self.move_gap = 4.0
+        # self.time_expansion_rate = 1
         
         self.check_radius = self.robot_radius
 
@@ -189,17 +189,18 @@ class DCP_Agent():
         time1 = time.time()
 
         if len(self.history_obs_list) >= self.history_frame:
-            worst_Q_list = self.calculate_worst_Q_value(self.history_obs_list, candidate_trajectories_tuple)
-            dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
-            print("worst_Q_list",worst_Q_list)
-            print("dcp_action",dcp_action)
+            worst_Q_list, used_worst_Q_list = self.calculate_worst_Q_value(self.history_obs_list, candidate_trajectories_tuple)
+            dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
+            # print("worst_Q_list",worst_Q_list)
+            # print("used_worst_Q_list",used_worst_Q_list)
+            # print("dcp_action",dcp_action)
             self.history_obs_list.pop(0)
 
         else:
             dcp_action = 0 # brake
         
         time2 = time.time()
-        print("time_consume_act",time2-time1)  
+        # print("time_consume_act",time2-time1)  
 
         # sorted_tuple = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
         # dcp_action = sorted_tuple[0][2] + 1
@@ -208,7 +209,6 @@ class DCP_Agent():
         
         control_action =  self.controller.get_control(self.dynamic_map, dcp_trajectory.trajectory, dcp_trajectory.desired_speed)
         action = [control_action.acc, control_action.steering]
-        
         return action
     
     def clear_buff(self):
@@ -217,8 +217,12 @@ class DCP_Agent():
     
     def calculate_worst_Q_value(self, state, candidate_trajectories_tuple):
         worst_Q_list = []
+        used_worst_Q_list = []
         worst_Q_list.append(-500) # -500 reward for brake action, low reward but bigger than collision trajectories
+        used_worst_Q_list.append(-500) # -500 reward for brake action, low reward but bigger than collision trajectories
 
+        
+        
         for action in candidate_trajectories_tuple:
 
             worst_Q_value = 9999
@@ -228,9 +232,12 @@ class DCP_Agent():
                 q_value_for_a_head = self.q_value_for_a_head(state, action, ensemble_index)
                 if q_value_for_a_head < worst_Q_value:
                     worst_Q_value = q_value_for_a_head
+                if ensemble_index == self.used_ensemble_num-1:
+                    used_worst_Q_list.append(worst_Q_value)
             worst_Q_list.append(worst_Q_value)       
 
-        return worst_Q_list
+        return worst_Q_list, used_worst_Q_list
+    
 
     def q_value_for_a_head(self, state, action, ensemble_index):
         g_value_list = []
@@ -473,6 +480,7 @@ class DCP_Transition_Model():
     # transition_training functions
     def add_training_data(self, obs, done):
         trajectory_length = self.history_frame + self.future_frame
+        print("-------------debug",len(self.one_trajectory), len(self.data), done)
         if not done:
             obs = np.array(obs)
             self.one_trajectory.append(obs)
@@ -480,6 +488,7 @@ class DCP_Transition_Model():
                 self.data.append(self.one_trajectory[0:trajectory_length])
                 self.one_trajectory.pop(0)
         else:
+            print("here")
             self.one_trajectory = []
  
     def normalize_state(self, history_obs):
@@ -502,7 +511,8 @@ class DCP_Transition_Model():
         if len(self.data) > 0:
             # take data
             for k in range(1):
-                one_trajectory = self.data[random.randint(0, len(self.data)-1)]
+                # one_trajectory = self.data[random.randint(0, len(self.data)-1)]
+                one_trajectory = self.data[0]
 
                 history_obs = one_trajectory[0:self.history_frame] 
                 history_obs = self.normalize_state(history_obs)
@@ -541,7 +551,7 @@ class DCP_Transition_Model():
                 # print("fde", fde)
 
                 self.trained_data.append(one_trajectory)
-                # self.data.pop(0)
+                self.data.pop(0)
 
         return None
  
