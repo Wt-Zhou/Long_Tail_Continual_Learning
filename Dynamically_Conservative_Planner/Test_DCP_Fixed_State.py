@@ -22,8 +22,8 @@ from tqdm import tqdm
 from DCP_Agent.Agent import DCP_Agent
 from results import Results
 
-TEST_EPISODES = 200
-LOAD_STEP = 4000
+TEST_EPISODES = 300
+LOAD_STEP = 160000
 ROLLOUT_TIMES = 10
 
 if __name__ == '__main__':
@@ -38,14 +38,18 @@ if __name__ == '__main__':
     # Result class
     result = Results(agent.history_frame, create_new_train_file=False)
     result.clear_old_test_data()
-    
+    last_train_state = None
     # Loop over episodes
     for episode in tqdm(range(0, TEST_EPISODES), unit='episodes'):
         
         print('Restarting episode')
-        # obs = env.reset()
-        trained_state = result.sampled_trained_state(episode)
-        obs = env.reset_with_state(trained_state)
+        obs = env.reset()
+        # trained_state = result.sampled_trained_state(episode)
+        # if trained_state == last_train_state:
+        #     continue
+        # last_train_state = trained_state
+
+        # obs = env.reset_with_state(trained_state)
         if obs is None:
             continue
         done = False
@@ -70,7 +74,8 @@ if __name__ == '__main__':
                 potential_dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
                 estimated_q_lower_bound = worst_Q_list[potential_dcp_action[0]]
 
-                print("used_worst_Q_list",used_worst_Q_list)
+                # print("used_worst_Q_list",used_worst_Q_list)
+                print("obs",agent.history_obs_list)
                 print("worst_Q_list",worst_Q_list)
                 print("dcp_action",dcp_action)
                 state = np.array(agent.history_obs_list).flatten().tolist() # for record
@@ -89,6 +94,15 @@ if __name__ == '__main__':
                             env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
                                                 end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
                                                 thickness=0.2,  color=carla.Color(255, 0, 0), life_time=4)
+            
+            # for trajectory in agent.trajectory_planner.all_trajectory:
+            #     for i in range(len(trajectory[0].x)-1):
+    
+            #         # env.debug.draw_point(carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
+            #         #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
+            #         env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
+            #                             end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
+            #                             thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
             
             g_value = 0
             non_colli = 1
@@ -123,18 +137,14 @@ if __name__ == '__main__':
             safety.append(non_colli)
             
             agent.clear_buff()
-            obs = env.reset_with_state(trained_state)
-            # obs = env.reset()
+            # obs = env.reset_with_state(trained_state)
+            obs = env.reset()
             if obs is None:
                 break
             
         true_q_value = np.mean(true_q_value)
         safety = np.mean(safety)
         
-        print("estimated_q_lower_bound", estimated_q_lower_bound)
-        print("true_q_value", true_q_value)
-        print("safety", safety)
-        print("efficiency", efficiency)
         result.record_dcp_performance(state, dcp_action, estimated_q_lower_bound, true_q_value, 
                                       safety, efficiency)
         

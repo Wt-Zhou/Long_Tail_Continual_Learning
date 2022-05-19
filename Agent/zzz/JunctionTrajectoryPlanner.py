@@ -18,7 +18,7 @@ DT = 0.1  # time tick [s]
 MAXT = 3.01  # max prediction time [m]
 MINT = 3.0  # min prediction time [m]
 TARGET_SPEED = 30.0 / 3.6  # target speed [m/s]
-D_T_S = 12.0 / 3.6  # target speed sampling length [m/s]
+D_T_S = 14.0 / 3.6  # target speed sampling length [m/s]
 N_S_SAMPLE = 2  # sampling number of target speed
 
 # Collision check
@@ -164,7 +164,6 @@ class JunctionTrajectoryPlanner(object):
 
             start_state = self.calculate_start_state(dynamic_map)
             # self.obs_prediction.update_prediction(dynamic_map)
-            
             generated_trajectory, index = self.frenet_optimal_planning(self.csp, self.c_speed, start_state)
             
             return self.all_trajectory
@@ -277,7 +276,7 @@ class JunctionTrajectoryPlanner(object):
         self.all_trajectory = path_tuples
         sorted_fplist = sorted(path_tuples, key=lambda path_tuples: path_tuples[1])
         
-        print("How many action?",len(sorted_fplist))
+        # print("How many action?",len(sorted_fplist))
 
         sorted_fplist = self.check_paths(sorted_fplist)
         t3 = time.time()

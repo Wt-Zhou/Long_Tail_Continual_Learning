@@ -36,7 +36,7 @@ EPISODES=62
 def _kinematic_model(vehicle_num, obs, future_frame, action_list, throttle_scale, steer_scale, dt):
     # vehicle model parameter
     wheelbase = 2.96
-    max_steer = np.deg2rad(45)
+    max_steer = np.deg2rad(60)
     c_r = 0.01
     c_a = 0.05
 
@@ -133,8 +133,8 @@ class DCP_Agent():
         self.env = env
         
         # transition model parameter        
-        self.ensemble_num = 1
-        self.used_ensemble_num = 1
+        self.ensemble_num = 20
+        self.used_ensemble_num = 20
         self.history_frame = 1
         self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
         self.obs_scale = 10
@@ -170,7 +170,7 @@ class DCP_Agent():
         # DCP parameter
         self.robot_radius = 1.5
         self.move_gap = 2.5
-        self.time_expansion_rate = 0.01
+        self.time_expansion_rate = 0.04
         # conservative baseline parameter
         # self.robot_radius = 5.0 
         # self.move_gap = 4.0
@@ -480,15 +480,13 @@ class DCP_Transition_Model():
     # transition_training functions
     def add_training_data(self, obs, done):
         trajectory_length = self.history_frame + self.future_frame
-        print("-------------debug",len(self.one_trajectory), len(self.data), done)
         if not done:
             obs = np.array(obs)
             self.one_trajectory.append(obs)
-            if len(self.one_trajectory) > trajectory_length:
+            if len(self.one_trajectory) >= trajectory_length:
                 self.data.append(self.one_trajectory[0:trajectory_length])
                 self.one_trajectory.pop(0)
         else:
-            print("here")
             self.one_trajectory = []
  
     def normalize_state(self, history_obs):
@@ -613,7 +611,7 @@ class DCP_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.5, b=0.5)
+            nn.init.uniform_(m.weight, a=-0.1, b=0.1)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式

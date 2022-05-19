@@ -26,7 +26,7 @@ class Results():
             self.all_state_list = np.loadtxt("DCP_results/trained_state.txt").tolist()
             self.trained_state_counter = len(self.all_state_list)
             self.test_state_counter = 0
-
+            self.reload_train_state_to_rtree(history_frame)
             print("Loaded Saved Rtree, len:",self.trained_state_counter)
             
 
@@ -39,9 +39,8 @@ class Results():
         trained_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
         test_state_tree_prop.dimension = history_frame * 20 # 4 vehicles
         
-        # self.trained_state_dist = np.array([[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]])
         self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=0.5)
-        self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
+        # self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
         self.test_state_tree = rindex.Index('DCP_results/test_state_index',properties=test_state_tree_prop)
         
         self.all_test_state_list = []
@@ -55,6 +54,23 @@ class Results():
     def calculate_visited_times(self, state):
         
         return sum(1 for _ in self.trained_state_tree.intersection(state.tolist()))
+    
+    def reload_train_state_to_rtree(self, history_frame):
+        if osp.exists("DCP_results/trained_state_index.dat"):
+            os.remove("DCP_results/trained_state_index.dat")
+            os.remove("DCP_results/trained_state_index.idx")
+        trained_state_tree_prop = rindex.Property()
+        trained_state_tree_prop.dimension = history_frame * 20 
+        self.trained_state_dist = np.full(shape=history_frame * 20, fill_value=0.5)
+        self.trained_state_tree = rindex.Index('DCP_results/trained_state_index',properties=trained_state_tree_prop)
+        
+        reload_counter = 0
+        for obs in self.all_state_list:
+            obs = np.array(obs).flatten().tolist()
+            self.trained_state_tree.insert(reload_counter,
+            tuple((obs-self.trained_state_dist).tolist()+(obs+self.trained_state_dist).tolist()))
+            reload_counter += 1
+            print("reload_counter",reload_counter)
 
 
 # 1. Counted Trained Dataset                    
@@ -62,6 +78,9 @@ class Results():
         obs = his_obs_frames
         obs = np.array(obs).flatten().tolist()
         self.all_state_list.append(obs)
+        print("obs",obs)
+        print("obs1",tuple((obs-self.trained_state_dist).tolist()+(obs+self.trained_state_dist).tolist()))
+
         self.trained_state_tree.insert(self.trained_state_counter,
             tuple((obs-self.trained_state_dist).tolist()+(obs+self.trained_state_dist).tolist()))
         self.trained_state_outfile.write(self.trained_state_format % tuple(obs))
@@ -237,6 +256,11 @@ class Results():
     def record_dcp_performance(self, state, candidate_action_index, estimated_q_lower_bound, true_q_value, 
                                safety_rate, efficiency):
         trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) 
+        print("estimated_q_lower_bound", estimated_q_lower_bound)
+        print("true_q_value", true_q_value)
+        print("safety_rate", safety_rate)
+        print("efficiency", efficiency)
+        print("trained_times", trained_times)
         with open("DCP_results/dcp_performance_fixed_state.txt", 'a') as fw:
                 fw.write(str(state)) 
                 fw.write(", ")
