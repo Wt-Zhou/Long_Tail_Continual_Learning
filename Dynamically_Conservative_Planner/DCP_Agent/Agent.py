@@ -134,7 +134,7 @@ class DCP_Agent():
         
         # transition model parameter        
         self.ensemble_num = 20
-        self.used_ensemble_num = 20
+        self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
         self.obs_scale = 10
@@ -168,13 +168,13 @@ class DCP_Agent():
         
         # collision checking parameter
         # DCP parameter
-        self.robot_radius = 1.5
-        self.move_gap = 2.5
-        self.time_expansion_rate = 0.04
+        # self.robot_radius = 1.5
+        # self.move_gap = 2.5
+        # self.time_expansion_rate = 0.04
         # conservative baseline parameter
-        # self.robot_radius = 5.0 
-        # self.move_gap = 4.0
-        # self.time_expansion_rate = 1
+        self.robot_radius = 1.5 
+        self.move_gap = 2.5
+        self.time_expansion_rate = 0.2
         
         self.check_radius = self.robot_radius
 

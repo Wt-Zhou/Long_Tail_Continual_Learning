@@ -53,8 +53,6 @@ if __name__ == '__main__':
         true_q_value = []
 
         for i in range(ROLLOUT_TIMES):
-
-            print("obs",obs)
             obs = np.array(obs)
             agent.dynamic_map.update_map_from_list_obs(obs)
             candidate_trajectories_tuple = agent.trajectory_planner.generate_candidate_trajectories(agent.dynamic_map)

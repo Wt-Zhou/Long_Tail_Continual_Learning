@@ -253,10 +253,11 @@ class Results():
                                
 
 # 4. Fixed State DCP Performance
-    def record_dcp_performance(self, state, candidate_action_index, estimated_q_lower_bound, true_q_value, 
-                               safety_rate, efficiency):
+    def record_dcp_performance(self, state, candidate_action_index, action_q_lower_bound, dcp_action_q_lower_bound
+                               , true_q_value, safety_rate, efficiency):
         trained_times = sum(1 for _ in self.trained_state_tree.intersection(state)) 
-        print("estimated_q_lower_bound", estimated_q_lower_bound)
+        print("dcp_action_q_lower_bound", dcp_action_q_lower_bound)
+        print("action_q_lower_bound", action_q_lower_bound)
         print("true_q_value", true_q_value)
         print("safety_rate", safety_rate)
         print("efficiency", efficiency)
@@ -268,7 +269,9 @@ class Results():
                 fw.write(", ")
                 fw.write(str(candidate_action_index)) 
                 fw.write(", ")
-                fw.write(str(estimated_q_lower_bound)) 
+                fw.write(str(dcp_action_q_lower_bound)) 
+                fw.write(", ")
+                fw.write(str(action_q_lower_bound)) 
                 fw.write(", ")
                 fw.write(str(true_q_value)) 
                 fw.write(", ")

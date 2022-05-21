@@ -48,7 +48,6 @@ if __name__ == '__main__':
         # if trained_state == last_train_state:
         #     continue
         # last_train_state = trained_state
-
         # obs = env.reset_with_state(trained_state)
         if obs is None:
             continue
@@ -58,52 +57,53 @@ if __name__ == '__main__':
         true_q_value = []
         safety = []
         efficiency = []
+   
+        obs = np.array(obs)
+        agent.dynamic_map.update_map_from_list_obs(obs)
+        candidate_trajectories_tuple = agent.trajectory_planner.generate_candidate_trajectories(agent.dynamic_map)
+        # DCP process            
+        agent.history_obs_list.append(obs)
 
-        for i in range(ROLLOUT_TIMES):
-
-            obs = np.array(obs)
-            agent.dynamic_map.update_map_from_list_obs(obs)
-            candidate_trajectories_tuple = agent.trajectory_planner.generate_candidate_trajectories(agent.dynamic_map)
-            # DCP process            
-            agent.history_obs_list.append(obs)
-
-            if len(agent.history_obs_list) >= agent.history_frame:
-                worst_Q_list, used_worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
-                dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
-                
-                potential_dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
-                estimated_q_lower_bound = worst_Q_list[potential_dcp_action[0]]
-
-                # print("used_worst_Q_list",used_worst_Q_list)
-                print("obs",agent.history_obs_list)
-                print("worst_Q_list",worst_Q_list)
-                print("dcp_action",dcp_action)
-                state = np.array(agent.history_obs_list).flatten().tolist() # for record
-                agent.history_obs_list.pop(0)
-
-            else:
-                dcp_action = 0 # brake
-        
-            dcp_trajectory = agent.trajectory_planner.trajectory_update_CP(dcp_action)
+        if len(agent.history_obs_list) >= agent.history_frame:
+            worst_Q_list, used_worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
+            dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
             
-            #plot
-            if len(agent.rollout_trajectory_tuple)>0:
-                for rollout_trajectory_head in agent.rollout_trajectory_tuple:
-                    for rollout_trajectory in rollout_trajectory_head:                     
-                        for i in range(len(rollout_trajectory[0])-1):
-                            env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
-                                                end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
-                                                thickness=0.2,  color=carla.Color(255, 0, 0), life_time=4)
-            
-            # for trajectory in agent.trajectory_planner.all_trajectory:
-            #     for i in range(len(trajectory[0].x)-1):
+            potential_dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
+            action_q_lower_bound = worst_Q_list[dcp_action[0]]
+            dcp_action_q_lower_bound = worst_Q_list[potential_dcp_action[0]]
+
+            # print("used_worst_Q_list",used_worst_Q_list)
+            print("obs",agent.history_obs_list)
+            print("worst_Q_list",worst_Q_list)
+            print("dcp_action",dcp_action)
+            state = np.array(agent.history_obs_list).flatten().tolist() # for record
+            agent.history_obs_list.pop(0)
+
+        else:
+            dcp_action = 0 # brake
     
-            #         # env.debug.draw_point(carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
-            #         #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
-            #         env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
-            #                             end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
-            #                             thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
+        dcp_trajectory = agent.trajectory_planner.trajectory_update_CP(dcp_action)
+        
+        #plot
+        if len(agent.rollout_trajectory_tuple)>0:
+            for rollout_trajectory_head in agent.rollout_trajectory_tuple:
+                for rollout_trajectory in rollout_trajectory_head:                     
+                    for i in range(len(rollout_trajectory[0])-1):
+                        env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
+                                            end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
+                                            thickness=0.2,  color=carla.Color(255, 0, 0), life_time=4)
+        
+        # for trajectory in agent.trajectory_planner.all_trajectory:
+        #     for i in range(len(trajectory[0].x)-1):
+
+        #         # env.debug.draw_point(carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
+        #         #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
+        #         env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
+        #                             end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
+        #                             thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
             
+        for i in range(ROLLOUT_TIMES):
+    
             g_value = 0
             non_colli = 1
             trajectory = candidate_trajectories_tuple[dcp_action[0]-1][0]
@@ -145,7 +145,7 @@ if __name__ == '__main__':
         true_q_value = np.mean(true_q_value)
         safety = np.mean(safety)
         
-        result.record_dcp_performance(state, dcp_action, estimated_q_lower_bound, true_q_value, 
+        result.record_dcp_performance(state, dcp_action, action_q_lower_bound, dcp_action_q_lower_bound, true_q_value, 
                                       safety, efficiency)
         
 
