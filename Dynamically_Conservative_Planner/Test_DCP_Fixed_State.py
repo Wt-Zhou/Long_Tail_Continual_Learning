@@ -24,7 +24,7 @@ from results import Results
 
 TEST_EPISODES = 300
 LOAD_STEP = 160000
-ROLLOUT_TIMES = 10
+ROLLOUT_TIMES = 1
 
 if __name__ == '__main__':
 
@@ -93,14 +93,14 @@ if __name__ == '__main__':
                                             end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
                                             thickness=0.2,  color=carla.Color(255, 0, 0), life_time=4)
         
-        # for trajectory in agent.trajectory_planner.all_trajectory:
-        #     for i in range(len(trajectory[0].x)-1):
+        for trajectory in agent.trajectory_planner.all_trajectory:
+            for i in range(len(trajectory[0].x)-1):
 
-        #         # env.debug.draw_point(carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
-        #         #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
-        #         env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
-        #                             end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
-        #                             thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
+                # env.debug.draw_point(carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+1),
+                #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
+                env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
+                                    end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
+                                    thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
             
         for i in range(ROLLOUT_TIMES):
     
