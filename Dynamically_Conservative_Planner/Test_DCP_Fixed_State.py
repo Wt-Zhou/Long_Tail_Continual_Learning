@@ -24,7 +24,7 @@ from results import Results
 
 TEST_EPISODES = 300
 LOAD_STEP = 160000
-ROLLOUT_TIMES = 1
+ROLLOUT_TIMES = 10
 
 if __name__ == '__main__':
 
