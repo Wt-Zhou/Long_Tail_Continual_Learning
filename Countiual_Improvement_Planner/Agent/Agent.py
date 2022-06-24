@@ -15,6 +15,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
+    KinematicBicycleModel
+from DCP_Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
 from joblib import Parallel, delayed
 from numba import jit
 from numpy import clip, cos, sin, tan
@@ -25,11 +28,6 @@ from Agent.zzz.controller import Controller
 from Agent.zzz.dynamic_map import DynamicMap
 from Agent.zzz.frenet import Frenet_path
 from Agent.zzz.JunctionTrajectoryPlanner import JunctionTrajectoryPlanner
-from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
-    KinematicBicycleModel
-from DCP_Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
-
-EPISODES=62
 
 
 @jit(nopython=True)

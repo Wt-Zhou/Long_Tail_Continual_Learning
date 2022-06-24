@@ -38,7 +38,7 @@ class TrajPredMLP(nn.Module):
 class TrajPredGaussion(nn.Module):
     """Predict gaussion trajectory, in offset format"""
 
-    def __init__(self, in_channels, out_channels, hidden_unit, max_sigma=0.5, min_sigma=1e-4):
+    def __init__(self, in_channels, out_channels, hidden_unit, max_sigma=2, min_sigma=1e-4):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(in_channels, hidden_unit),
