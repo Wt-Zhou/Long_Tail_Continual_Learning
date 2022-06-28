@@ -24,6 +24,7 @@ from numpy import clip, cos, sin, tan
 from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
+from Agent.drl_library.dqn.replay_buffer import Replay_Buffer
 from Agent.zzz.controller import Controller
 from Agent.zzz.dynamic_map import DynamicMap
 from Agent.zzz.frenet import Frenet_path
@@ -126,15 +127,17 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
     return False
     
 
-class DCP_Agent():
-    def __init__(self, env, training=False):
+class OCRL_Agent():
+    def __init__(self, env, empty_env, training=False):
         self.env = env
+        self.empty_env = empty_env # the empty env used to imagine the ego SDV's dynamics
         
         # transition model parameter        
         self.ensemble_num = 20
         self.used_ensemble_num = 1
         self.history_frame = 1
-        self.future_frame = 20 # Note that the length of candidate trajectories should larger than future frame
+        self.future_frame = 1 
+        self.discrete_action_num = 8
         self.obs_scale = 10
         self.obs_bias_x = 130
         self.obs_bias_y = 200
@@ -142,17 +145,23 @@ class DCP_Agent():
         self.steer_scale = 0.1
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
+        
         self.rollout_times = 1
+        self.rollout_length = 30
         self.dt = 0.1
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.set_default_tensor_type(torch.DoubleTensor)
         
-        self.ensemble_transition_model = DCP_Transition_Model(self.ensemble_num, self.history_frame, 
+        self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
                                                               self.obs_bias_x, self.obs_bias_y, self.obs_scale, 
                                                               self.throttle_scale, self.steer_scale, 
                                                               self.device, training, self.dt)
+        
+        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num)
+        self.replay_buffer = Replay_Buffer(10000)
+        
         self.history_obs_list = []
         self.rollout_trajectory_tuple = []
         
@@ -165,124 +174,109 @@ class DCP_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        # DCP parameter # last version:1.5,2.5,0.06
-        # self.robot_radius = 1.2 
-        # self.move_gap = 2.5
-        # self.time_expansion_rate = 0.06
-        # conservative baseline parameter
         self.robot_radius = 1.2 # 
         self.move_gap = 2.5
-        self.time_expansion_rate = 0.09#0.2 reachable set
-        
+        self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
 
+ 
+    def generate_worst_confidence_policy(self, s_0):
+        
+        steps = 0
+        
+        for i in range(self.rollout_times):
+            for frame_idx in range(0, self.rollout_length):
+                _ = self.empty_env.reset_with_state(s_0)
+                obs = np.array(s_0)
+                                
+                self.dynamic_map.update_map_from_list_obs(obs)
+                candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
+                self.history_obs_list.append(obs)
+
+                if len(self.history_obs_list) >= self.history_frame:
+                    epsilon = self.epsilon_by_frame(steps)
+                    action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon)
+                    self.history_obs_list.pop(0)
+
+                else:
+                    action = 0 # brake
+                
+                trajectory = self.trajectory_planner.trajectory_update_CP(action)
+                control_action =  self.controller.get_control(self.dynamic_map, trajectory.trajectory, trajectory.desired_speed)
+                action = [control_action.acc, control_action.steering]
+                
+                new_obs, _, done, new_obs_ori = self.empty_env.step(action)
+
+                # use transition model to imagine surrounding agents
+                new_env_obs_list = self.ensemble_transition_model()
+                worst_confidence_q_list = self.worst_confidence_Q_network.forward(new_env_obs_list)
+                new_env_obs = np.where(worst_confidence_q_list==np.max(worst_confidence_q_list))
+                new_imgaine_obs = new_obs + new_env_obs
+                reward = self.calculate_reward(new_imgaine_obs)
+                
+                # update worst_confidence_value
+                q_values      = self.worst_confidence_Q_network(obs)
+                next_q_values = self.worst_confidence_Q_network(new_imgaine_obs)
+                q_value          = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
+                next_q_value     = next_q_values.max(1)[0]
+                expected_q_value = reward + gamma * next_q_value * (1 - done)
+                loss  = (q_value - expected_q_value.detach()).pow(2) * weights
+                loss  = loss.mean()
+                    
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                
+                obs = new_obs
+                                
+                steps += 1
+        
+        return None
+   
+    def epsilon_by_frame(self, frame_idx):
+        epsilon_start = 1.0
+        epsilon_final = 0.01
+        epsilon_decay = 500
+        return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
+   
+    def collect_real_world_data(self, obs, action, next_obs, reward, done):
+        self.replay_buffer.add(obs, action, next_obs, reward, done)
+   
+    def update_ensemble_transition_model(self):
+        data = self.replay_buffer.data
+        for i in range(self.ensemble_num):
+            predict_state = 
+            target_state = 
+        return 
+    
         
     def act(self, obs):
         
         obs = np.array(obs)
         self.dynamic_map.update_map_from_list_obs(obs)
         candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
-        # DCP process            
+        # OCRL process            
         self.history_obs_list.append(obs)
-        time1 = time.time()
 
         if len(self.history_obs_list) >= self.history_frame:
-            worst_Q_list, used_worst_Q_list = self.calculate_worst_Q_value(self.history_obs_list, candidate_trajectories_tuple)
-            dcp_action = np.where(used_worst_Q_list==np.max(used_worst_Q_list))[0] 
-            # print("worst_Q_list",worst_Q_list)
-            # print("used_worst_Q_list",used_worst_Q_list)
-            # print("dcp_action",dcp_action)
+            ocrl_action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon=0)
             self.history_obs_list.pop(0)
 
         else:
-            dcp_action = 0 # brake
+            ocrl_action = 0 # brake
         
-        time2 = time.time()
-        # print("time_consume_act",time2-time1)  
-
-        # sorted_tuple = sorted(candidate_trajectories_tuple, key=lambda candidate_trajectories_tuple: candidate_trajectories_tuple[1])
-        # dcp_action = sorted_tuple[0][2] + 1
+        ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
         
-        dcp_trajectory = self.trajectory_planner.trajectory_update_CP(dcp_action)
-        
-        control_action =  self.controller.get_control(self.dynamic_map, dcp_trajectory.trajectory, dcp_trajectory.desired_speed)
+        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
         action = [control_action.acc, control_action.steering]
         return action
+    
+        
     
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)
         self.history_obs_list = []
-    
-    def calculate_worst_Q_value(self, state, candidate_trajectories_tuple):
-        worst_Q_list = []
-        used_worst_Q_list = []
-        worst_Q_list.append(-500) # -500 reward for brake action, low reward but bigger than collision trajectories
-        used_worst_Q_list.append(-500) # -500 reward for brake action, low reward but bigger than collision trajectories
-
-        
-        
-        for action in candidate_trajectories_tuple:
-
-            worst_Q_value = 9999
-            self.rollout_trajectory_tuple = []
-
-            for ensemble_index in range(self.ensemble_num):
-                q_value_for_a_head = self.q_value_for_a_head(state, action, ensemble_index)
-                if q_value_for_a_head < worst_Q_value:
-                    worst_Q_value = q_value_for_a_head
-                if ensemble_index == self.used_ensemble_num-1:
-                    used_worst_Q_list.append(worst_Q_value)
-            worst_Q_list.append(worst_Q_value)       
-
-        return worst_Q_list, used_worst_Q_list
-    
-
-    def q_value_for_a_head(self, state, action, ensemble_index):
-        g_value_list = []
-        for i in range(self.rollout_times):
-            time1 = time.time()
-            ego_trajectory, rollout_trajectory = self.ensemble_transition_model.rollout_jit_acc(state, action, ensemble_index)
-            time2 = time.time()
-            self.rollout_trajectory_tuple.append(rollout_trajectory)
-            g_value = self.calculate_g_value(ego_trajectory, rollout_trajectory)
-            time3 = time.time()
-            # print("time_consume",time3-time2 , time2-time1)  
-
-            g_value_list.append(g_value)
-            
-        q_value = np.mean(g_value_list)
-        return q_value
-        
-    def calculate_g_value(self, ego_trajectory, rollout_trajectory): 
-        # ego_x_list = numba.typed.List(ego_trajectory[0].x)
-        # ego_y_list = numba.typed.List(ego_trajectory[0].y)
-        # ego_yaw_list = numba.typed.List(ego_trajectory[0].yaw)
-        ego_x_list = np.array(ego_trajectory[0].x)
-        ego_y_list = np.array(ego_trajectory[0].y)
-        ego_yaw_list = np.array(ego_trajectory[0].yaw)
-        rollout_trajectory = np.array(rollout_trajectory)
-        
-        if _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, self.future_frame, self.move_gap, self.check_radius, self.time_expansion_rate):
-            g_colli = -500
-        else:
-            g_colli = 0
- 
-        # g_ego = -ego_trajectory[1] # fp.cf # cost of whole trajectory
-        # cost of consider horizon
-        Jp = sum(np.power(ego_trajectory[0].d_ddd[0:self.future_frame], 2))
-        Js = sum(np.power(ego_trajectory[0].s_ddd[0:self.future_frame], 2))
-
-        tfps = [self.trajectory_planner.target_speed-x for x in ego_trajectory[0].s_d[0:self.future_frame]]
-        ds = sum(np.power(tfps, 2))
-        dd = sum(np.power(ego_trajectory[0].d[0:self.future_frame], 2))
-
-        cd = 0.1 * Jp + 0.1 * 0.1 * self.future_frame + 0.05 * dd
-        cv = 0.1 * Js + 0.1 * 0.1 * self.future_frame + 0.05 * ds
-        g_ego = -(1.0 * cd + 1.0 * cv)
-        g_value = g_colli + g_ego
-        
-        return g_value
-    
+  
     def colli_check(self, ego_trajectory, rollout_trajectory):
         for i in range(self.future_frame):
             ego_x = ego_trajectory[0].x[i]
@@ -326,7 +320,7 @@ class DCP_Agent():
         return False
         
        
-class DCP_Transition_Model():
+class OCRL_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_bias_x, obs_bias_y, 
                  obs_scale, throttle_scale, steer_scale, device, training, dt):
         super(DCP_Transition_Model, self).__init__()
@@ -373,7 +367,6 @@ class DCP_Transition_Model():
         self.one_trajectory = []
         self.infer_obs_list = []
     
-        self.rollout_times = 30   
 
     def rollout(self, state, candidate_trajectory, ensemble_index):
     
@@ -642,6 +635,31 @@ class DCP_Transition_Model():
                 'DCP_models/ensemble_models_%s_%s.pt' % (train_step, i)
             )
 
+
+class Q_network(nn.Module):
+    def __init__(self, num_inputs, num_actions):
+        super(Q_network, self).__init__()
+        
+        self.layers = nn.Sequential(
+            nn.Linear(num_inputs, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_actions)
+        )
+        self.num_actions = num_actions
+        
+    def forward(self, x):
+        return self.layers(x)
+    
+    def act(self, state, epsilon):
+        if random.random() > epsilon:
+            state   = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
+            q_value = self.forward(state)
+            action  = q_value.max(1)[1].data[0]
+        else:
+            action = random.randrange(self.num_actions)
+        return action
 
 if __name__ == '__main__':
     a=1
