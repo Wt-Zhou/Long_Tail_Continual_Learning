@@ -126,6 +126,26 @@ class Replay_Buffer(object):
         if k:
             return obses, actions, rewards, next_obses, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
         return obses, actions, rewards, next_obses, not_dones
+    
+    def get_and_delete_from_tail(self):
+        dxs = np.array([self.idx]) 
+        obses = torch.as_tensor(self.obses[self.idx], device=self.device).float()
+        actions = torch.as_tensor(self.actions[self.idx], device=self.device)
+        rewards = torch.as_tensor(self.rewards[self.idx], device=self.device)
+        next_obses = torch.as_tensor(
+            self.next_obses[self.idx], device=self.device
+        ).float()
+        not_dones = torch.as_tensor(self.not_dones[self.idx], device=self.device)
+        
+        del self.obses[self.idx]
+        del self.actions[self.idx]
+        del self.rewards[self.idx]
+        del self.next_obses[self.idx]
+        self.idx -= 1
+        
+        if k:
+            return obses, actions, rewards, next_obses, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
+        return obses, actions, rewards, next_obses, not_dones
 
     def save(self, save_dir):
         if self.idx == self.last_save:

@@ -160,7 +160,9 @@ class OCRL_Agent():
                                                               self.device, training, self.dt)
         
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num)
+        
         self.replay_buffer = Replay_Buffer(10000)
+        self.trained_replay_buffer = Replay_Buffer(1000000)
         
         self.history_obs_list = []
         self.rollout_trajectory_tuple = []
@@ -178,9 +180,80 @@ class OCRL_Agent():
         self.move_gap = 2.5
         self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
+      
+    def act(self, obs):
+        
+        obs = np.array(obs)
+        self.dynamic_map.update_map_from_list_obs(obs)
+        candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
+        # OCRL process            
+        self.history_obs_list.append(obs)
 
- 
-    def generate_worst_confidence_policy(self, s_0):
+        if len(self.history_obs_list) >= self.history_frame:
+            ocrl_action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon=0)
+            self.history_obs_list.pop(0)
+
+        else:
+            ocrl_action = 0 # brake
+        
+        ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
+        
+        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+        action = [control_action.acc, control_action.steering]
+        return action
+    
+    def learning_by_driving(self):
+        # Create environment 
+        env = self.env
+
+        # Create Agent
+        self.ensemble_transition_model.load(LOAD_STEP)
+        
+        # Loop over episodes
+        for episode in tqdm(range(1, TEST_EPISODES + 1), unit='episodes'):
+            
+            print('Restarting episode')
+
+            # Reset environment and get initial state
+            obs = env.reset()
+            done = False
+            
+            # Update worst-confidence optimal policy
+            self.update_ensemble_transition_model()
+            self.update_worst_confidence_value(obs)
+                    
+            # Loop over steps
+            while True:
+                obs = np.array(obs)
+                action = self.act(obs)
+                
+                new_obs, reward, done, collision = env.step(action)  
+                
+                # Collect data
+                self.replay_buffer.add(obs, action, new_obs, reward, done)
+                
+                obs = new_obs
+                if done:
+                    agent.clear_buff()
+                    break
+                      
+        return None
+
+    def epsilon_by_frame(self, frame_idx):
+        epsilon_start = 1.0
+        epsilon_final = 0.01
+        epsilon_decay = 500
+        return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
+           
+    def update_ensemble_transition_model(self):
+        for i in range(self.replay_buffer.idx):
+            obs, action, new_obs, reward, done = self.replay_buffer.get_and_delete_from_tail()
+            self.ensemble_transition_model.update_model(obs, new_obs)
+
+            self.trained_replay_buffer.add(obs, action, new_obs, reward, done)
+        return None
+     
+    def update_worst_confidence_value(self, s_0):
         
         steps = 0
         
@@ -205,14 +278,16 @@ class OCRL_Agent():
                 control_action =  self.controller.get_control(self.dynamic_map, trajectory.trajectory, trajectory.desired_speed)
                 action = [control_action.acc, control_action.steering]
                 
-                new_obs, _, done, new_obs_ori = self.empty_env.step(action)
+                new_ego_obs, _, done, _ = self.empty_env.step(action)
 
                 # use transition model to imagine surrounding agents
-                new_env_obs_list = self.ensemble_transition_model()
-                worst_confidence_q_list = self.worst_confidence_Q_network.forward(new_env_obs_list)
-                new_env_obs = np.where(worst_confidence_q_list==np.max(worst_confidence_q_list))
-                new_imgaine_obs = new_obs + new_env_obs
-                reward = self.calculate_reward(new_imgaine_obs)
+                new_obs_list = self.ensemble_transition_model.rollout(obs, action, new_ego_obs)
+                worst_confidence_q_list = []
+                for new_obs in new_obs_list:
+                    worst_confidence_q_list.append(self.worst_confidence_Q_network.forward(new_obs))
+                new_obs = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))
+
+                reward = self.calculate_reward(obs, trajectory)
                 
                 # update worst_confidence_value
                 q_values      = self.worst_confidence_Q_network(obs)
@@ -233,49 +308,14 @@ class OCRL_Agent():
         
         return None
    
-    def epsilon_by_frame(self, frame_idx):
-        epsilon_start = 1.0
-        epsilon_final = 0.01
-        epsilon_decay = 500
-        return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
-   
-    def collect_real_world_data(self, obs, action, next_obs, reward, done):
-        self.replay_buffer.add(obs, action, next_obs, reward, done)
-   
-    def update_ensemble_transition_model(self):
-        data = self.replay_buffer.data
-        for i in range(self.ensemble_num):
-            predict_state = 
-            target_state = 
-        return 
-    
-        
-    def act(self, obs):
-        
-        obs = np.array(obs)
-        self.dynamic_map.update_map_from_list_obs(obs)
-        candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
-        # OCRL process            
-        self.history_obs_list.append(obs)
-
-        if len(self.history_obs_list) >= self.history_frame:
-            ocrl_action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon=0)
-            self.history_obs_list.pop(0)
-
-        else:
-            ocrl_action = 0 # brake
-        
-        ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
-        
-        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
-        action = [control_action.acc, control_action.steering]
-        return action
-    
-        
-    
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)
         self.history_obs_list = []
+  
+    def calculate_reward(obs, trajectory):
+        
+        
+        return reward
   
     def colli_check(self, ego_trajectory, rollout_trajectory):
         for i in range(self.future_frame):
@@ -368,118 +408,42 @@ class OCRL_Transition_Model():
         self.infer_obs_list = []
     
 
-    def rollout(self, state, candidate_trajectory, ensemble_index):
+    def rollout(self, obs, action, new_ego_obs):
     
         if ensemble_index > self.ensemble_num-1:
             print("[Warning]: Ensemble Index out of index!")
             return None
         
-        rollout_trajectory = []
-        history_obs = state
-        obs = history_obs[-1]
         vehicle_num = 0
         
-        for i in range(len(history_obs[0])):
-            if history_obs[0][i][0] != -999: # use -100 as signal, very unstable
+        for i in range(len(obs[0])):
+            if obs[0][i][0] != -999: # use -100 as signal, very unstable
                 vehicle_num += 1
         
         
-        history_obs = self.normalize_state(history_obs)        
-        history_obs = torch.tensor(history_obs).to(self.device)
+        obs = self.normalize_state(obs)        
+        obs = torch.tensor(obs).to(self.device)
 
-        predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
-        predict_action = predict_action.cpu().detach().numpy()
-        
-        time1 = time.time()
+        for i in range(self.ensemble_num):
+            predict_action, sigma = self.ensemble_models[ensemble_index](obs)
+            predict_action = predict_action.cpu().detach().numpy()
+            
+            
+            next_obs = [new_ego_obs[0]]
+            for j in range(1, vehicle_num):  # exclude ego vehicle
 
-        for j in range(1, vehicle_num):  # exclude ego vehicle
-            # one_path = Frenet_path()
-            # one_path.t = [t for t in np.arange(0.0, 0.1 * self.future_frame, 0.1)]
-            # one_path.c = j  # use the c to indicate which vehicle
-            # one_path.cd = ensemble_index  # use the cd to indicate which ensemble model
-            # one_path.cf = self.ensemble_num  # use the cf to indicate heads num
-            path = []
-            x_list = []
-            y_list = []
-            yaw_list = []
-            x = obs[j][0]
-            y = obs[j][1]
-            velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
-            yaw = obs[j][4]
-            for k in range(0, self.future_frame):
-                throttle = predict_action[j*2*self.future_frame + 2*k] * self.throttle_scale
-                delta = predict_action[j*2*self.future_frame + 2*k+1] * self.steer_scale
+                x = obs[j][0]
+                y = obs[j][1]
+                velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
+                yaw = obs[j][4]
+                throttle = predict_action[j*2*self.future_frame] * self.throttle_scale
+                delta = predict_action[j*2*self.future_frame+1] * self.steer_scale
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(x, y, yaw, velocity, throttle, delta)
-                # print("vehicle model",j*2*self.future_frame + 2*k)
-                # print("vehicle model",x, y, yaw,throttle, delta)
-                # one_path.x.append(x)
-                # one_path.y.append(y)
-                # one_path.yaw.append(yaw)
-                x_list.append(x)
-                y_list.append(y)
-                yaw_list.append(yaw)
-                
-            path.append(x_list)
-            path.append(y_list)
-            path.append(yaw_list)
-            rollout_trajectory.append(path)
-
-        time2 = time.time()
-        # print("time",time2-time1)
-
-    
-        ego_trajectory = candidate_trajectory
-
+                next_obs.append([x,y,velocity*math.cos(yaw),velocity*math.sin(yaw),yaw])
+            next_obs_list.append(next_obs)
         
-        return ego_trajectory, rollout_trajectory
-    
-    def rollout_jit_acc(self, state, candidate_trajectory, ensemble_index):
-        time1 = time.time()
-
-        if ensemble_index > self.ensemble_num-1:
-            print("[Warning]: Ensemble Index out of index!")
-            return None
-        
-        rollout_trajectory = []
-        history_obs = state
-        obs = history_obs[-1]
-        
-
-        vehicle_num = 0
-        for i in range(len(history_obs[0])):
-            if history_obs[0][i][0] != -999: # use -100 as signal, very unstable
-                vehicle_num += 1
-
-        history_obs = self.normalize_state(history_obs)        
-        history_obs = torch.tensor(history_obs).to(self.device)
-        time2 = time.time()
-
-        predict_action, sigma = self.ensemble_models[ensemble_index](history_obs)
-        time3 = time.time()
-
-        predict_action = predict_action.cpu().detach().numpy()
-
-        rollout_trajectory = _kinematic_model(vehicle_num, obs, self.future_frame, predict_action, self.throttle_scale, 
-                                              self.steer_scale, self.dt)
-
-        time4 = time.time()
-        # print("time_consume",time4-time3, time3-time2 , time2-time1)             
-        ego_trajectory = candidate_trajectory
-
-        return ego_trajectory, rollout_trajectory
+        return next_obs_list
   
-    # transition_training functions
-    def add_training_data(self, obs, done):
-        trajectory_length = self.history_frame + self.future_frame
-        if not done:
-            obs = np.array(obs)
-            self.one_trajectory.append(obs)
-            if len(self.one_trajectory) >= trajectory_length:
-                self.data.append(self.one_trajectory[0:trajectory_length])
-                self.one_trajectory.pop(0)
-        else:
-            self.one_trajectory = []
- 
     def normalize_state(self, history_obs):
         normalize_state = []
         for obs in history_obs:
@@ -496,52 +460,27 @@ class OCRL_Transition_Model():
             
         return (np.array(normalize_state).flatten()/self.obs_scale) # flatten to list
     
-    def update_model(self):
-        if len(self.data) > 0:
-            # take data
-            for k in range(1):
-                # one_trajectory = self.data[random.randint(0, len(self.data)-1)]
-                one_trajectory = self.data[0]
+    def update_model(self, obs, new_obs):
+        obs = self.normalize_state(obs)
+        obs = torch.tensor(obs).to(self.device)
 
-                history_obs = one_trajectory[0:self.history_frame] 
-                history_obs = self.normalize_state(history_obs)
-                history_obs = torch.tensor(history_obs).to(self.device)
+        # target: output action
+        target_action = self.get_target_action_from_obs(obs, new_obs)
+        target_action = np.array(target_action).flatten().tolist()
+        target_action = torch.tensor(target_action).to(self.device)
 
-                # target: output action
-                target_action = self.get_target_action_from_obs(one_trajectory)
-                target_action = np.array(target_action).flatten().tolist()
-                target_action = torch.tensor(target_action).to(self.device)
+        for i in range(self.ensemble_num):
+            # compute loss
+            predict_action, sigma = self.ensemble_models[i](obs)
+            diff = (predict_action - target_action) / sigma
+            loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
+            print("------------loss", loss)
 
-                for i in range(self.ensemble_num):
-                    # compute loss
-                    predict_action, sigma = self.ensemble_models[i](history_obs)
-                    # print("target_action",target_action[40:80])
-                    # print("predict_action",predict_action[40:80])
-                    # print("sigma", sigma)
-                    # sigma = torch.ones_like(predict_action)
-                    diff = (predict_action - target_action) / sigma
-                    loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
-                    # loss = F.mse_loss(predict_action, target_action)
-                    print("------------loss", loss)
-
-                    # train
-                    self.ensemble_optimizer[i].zero_grad()
-                    loss.backward()
-                    self.ensemble_optimizer[i].step()
-
-                # closed loop test
-                # candidate_trajectory = 1
-                # ego_trajectory, rollout_trajectory = self.rollout(one_trajectory[0:self.history_frame] , candidate_trajectory, 0)
-                # dx = (rollout_trajectory[0].x[-1] - one_trajectory[-1][1][0])
-                # dy = (rollout_trajectory[0].y[-1] - one_trajectory[-1][1][1]) 
-                # fde = math.sqrt(dx*dx + dy*dy)
-                # print("dx",rollout_trajectory[0].x[-1], one_trajectory[-1][1][0])
-                # print("dy",rollout_trajectory[0].y[-1], one_trajectory[-1][1][1])
-                # print("fde", fde)
-
-                self.trained_data.append(one_trajectory)
-                self.data.pop(0)
-
+            # train
+            self.ensemble_optimizer[i].zero_grad()
+            loss.backward()
+            self.ensemble_optimizer[i].step()
+            
         return None
  
     def get_target_action_from_obs(self, one_trajectory):

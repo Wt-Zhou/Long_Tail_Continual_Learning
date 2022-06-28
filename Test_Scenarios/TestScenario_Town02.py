@@ -56,7 +56,7 @@ goal_point.rotation.roll = 0
 
 class CarEnv_02_Intersection_fixed:
 
-    def __init__(self):
+    def __init__(self, empty=False):
         
         # CARLA settings
         self.client = carla.Client("localhost", 2000)
@@ -119,6 +119,7 @@ class CarEnv_02_Intersection_fixed:
         self.stuck_time = 0
         
         # Env Vehicle Setting
+        self.empty = empty
         self.env_vehicle_bp = random.choice(self.world.get_blueprint_library().filter('vehicle.audi.tt'))
         if self.env_vehicle_bp.has_attribute('color'):
             color = '255,0,0'
@@ -371,8 +372,10 @@ class CarEnv_02_Intersection_fixed:
         self.collision_num = 0
 
     def reset(self):    
+        
         # Env vehicles
-        self.spawn_fixed_veh()
+        if not self.empty:
+            self.spawn_fixed_veh()
 
         # Ego vehicle
         self.spawn_ego_veh()
