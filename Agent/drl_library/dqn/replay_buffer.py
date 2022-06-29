@@ -137,14 +137,16 @@ class Replay_Buffer(object):
         ).float()
         not_dones = torch.as_tensor(self.not_dones[self.idx], device=self.device)
         
-        del self.obses[self.idx]
-        del self.actions[self.idx]
-        del self.rewards[self.idx]
-        del self.next_obses[self.idx]
+        # del self.obses[self.idx]
+        # del self.actions[self.idx]
+        # del self.rewards[self.idx]
+        # del self.next_obses[self.idx]
+        np.delete(self.obses, self.idx)
+        np.delete(self.actions, self.idx)
+        np.delete(self.rewards, self.idx)
+        np.delete(self.next_obses, self.idx)
         self.idx -= 1
         
-        if k:
-            return obses, actions, rewards, next_obses, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
         return obses, actions, rewards, next_obses, not_dones
 
     def save(self, save_dir):

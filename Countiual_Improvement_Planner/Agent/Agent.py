@@ -13,22 +13,26 @@ import matplotlib.pyplot as plt
 import numba
 import numpy as np
 import torch
+import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
-from DCP_Agent.transition_model.KinematicBicycleModel.kinematic_model import \
-    KinematicBicycleModel
-from DCP_Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
+import torch.optim as optim
 from joblib import Parallel, delayed
 from numba import jit
 from numpy import clip, cos, sin, tan
-from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
 from Agent.drl_library.dqn.replay_buffer import Replay_Buffer
+from Agent.transition_model.KinematicBicycleModel.kinematic_model import \
+    KinematicBicycleModel
+from Agent.transition_model.predmlp import TrajPredGaussion, TrajPredMLP
 from Agent.zzz.controller import Controller
 from Agent.zzz.dynamic_map import DynamicMap
 from Agent.zzz.frenet import Frenet_path
 from Agent.zzz.JunctionTrajectoryPlanner import JunctionTrajectoryPlanner
+
+USE_CUDA = True
+Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
 
 
 @jit(nopython=True)
@@ -128,16 +132,15 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
     
 
 class OCRL_Agent():
-    def __init__(self, env, empty_env, training=False):
+    def __init__(self, env, training=False):
         self.env = env
-        self.empty_env = empty_env # the empty env used to imagine the ego SDV's dynamics
         
         # transition model parameter        
-        self.ensemble_num = 20
+        self.ensemble_num = 2
         self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 1 
-        self.discrete_action_num = 8
+        self.discrete_action_num = 10
         self.obs_scale = 10
         self.obs_bias_x = 130
         self.obs_bias_y = 200
@@ -146,9 +149,10 @@ class OCRL_Agent():
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         
-        self.rollout_times = 1
-        self.rollout_length = 30
+        self.rollout_times = 30
+        self.rollout_length = 100
         self.dt = 0.1
+        self.gamma = 0.99
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.set_default_tensor_type(torch.DoubleTensor)
@@ -159,10 +163,15 @@ class OCRL_Agent():
                                                               self.throttle_scale, self.steer_scale, 
                                                               self.device, training, self.dt)
         
-        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num)
-        
-        self.replay_buffer = Replay_Buffer(10000)
-        self.trained_replay_buffer = Replay_Buffer(1000000)
+        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters())
+
+        self.collect_data = []
+        self.trained_replay_buffer = Replay_Buffer(obs_shape=env.observation_space.shape,
+                                            action_shape=env.action_space.shape, # discrete, 1 dimension!
+                                            capacity= 1000000,
+                                            batch_size= 1,
+                                            device=self.device)
         
         self.history_obs_list = []
         self.rollout_trajectory_tuple = []
@@ -190,7 +199,9 @@ class OCRL_Agent():
         self.history_obs_list.append(obs)
 
         if len(self.history_obs_list) >= self.history_frame:
-            ocrl_action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon=0)
+            obs_list = torch.tensor(self.ensemble_transition_model.normalize_state(self.history_obs_list[0])).to(self.device)
+
+            ocrl_action = self.worst_confidence_Q_network.act(obs_list, epsilon=0)
             self.history_obs_list.pop(0)
 
         else:
@@ -200,41 +211,42 @@ class OCRL_Agent():
         
         control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
         action = [control_action.acc, control_action.steering]
-        return action
+        return action, ocrl_action
     
-    def learning_by_driving(self):
+    def learning_by_driving(self, load_step, train_episode):
         # Create environment 
         env = self.env
 
         # Create Agent
-        self.ensemble_transition_model.load(LOAD_STEP)
+        self.ensemble_transition_model.load(load_step)
         
         # Loop over episodes
-        for episode in tqdm(range(1, TEST_EPISODES + 1), unit='episodes'):
+        for episode in tqdm(range(1, train_episode + 1), unit='episodes'):
             
             print('Restarting episode')
-
-            # Reset environment and get initial state
             obs = env.reset()
-            done = False
-            
+
             # Update worst-confidence optimal policy
             self.update_ensemble_transition_model()
             self.update_worst_confidence_value(obs)
                     
+            # Reset environment and get initial state
+            obs = env.reset()
+            done = False
             # Loop over steps
             while True:
                 obs = np.array(obs)
-                action = self.act(obs)
-                
+                action, ocrl_action = self.act(obs)
+                print("Real_World:Ocrl_action",ocrl_action)
                 new_obs, reward, done, collision = env.step(action)  
                 
                 # Collect data
-                self.replay_buffer.add(obs, action, new_obs, reward, done)
+                self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
                 
                 obs = new_obs
+
                 if done:
-                    agent.clear_buff()
+                    self.clear_buff()
                     break
                       
         return None
@@ -246,20 +258,31 @@ class OCRL_Agent():
         return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
            
     def update_ensemble_transition_model(self):
-        for i in range(self.replay_buffer.idx):
-            obs, action, new_obs, reward, done = self.replay_buffer.get_and_delete_from_tail()
+        print("[OCRL] Start Update Transition Model!")
+        data_amount = len(self.collect_data)
+        for i in range(data_amount):
+            obs = self.collect_data[0][0]
+            action = self.collect_data[0][1]
+            reward = self.collect_data[0][2]
+            new_obs = self.collect_data[0][3]
+            done = self.collect_data[0][4]
             self.ensemble_transition_model.update_model(obs, new_obs)
 
-            self.trained_replay_buffer.add(obs, action, new_obs, reward, done)
+            self.trained_replay_buffer.add(np.array(obs).flatten(), action.cpu(), reward, np.array(new_obs).flatten(), done)
+            self.collect_data.pop(0)
         return None
      
     def update_worst_confidence_value(self, s_0):
+        print("[OCRL] Start Update Worst Confidence Value!")
         
         steps = 0
         
         for i in range(self.rollout_times):
+            print("Start_rollout")
+            s_0 = self.env.reset(empty=True)
+            self.clear_buff()
+
             for frame_idx in range(0, self.rollout_length):
-                _ = self.empty_env.reset_with_state(s_0)
                 obs = np.array(s_0)
                                 
                 self.dynamic_map.update_map_from_list_obs(obs)
@@ -267,43 +290,60 @@ class OCRL_Agent():
                 self.history_obs_list.append(obs)
 
                 if len(self.history_obs_list) >= self.history_frame:
+                    # obs_list   = torch.tensor(np.array(self.history_obs_list)).to(self.device)
+                    obs_list = torch.tensor(self.ensemble_transition_model.normalize_state(self.history_obs_list[0])).to(self.device)
                     epsilon = self.epsilon_by_frame(steps)
-                    action = self.worst_confidence_Q_network.act(self.history_obs_list, epsilon)
+                    ocrl_action = self.worst_confidence_Q_network.act(obs_list, epsilon)
                     self.history_obs_list.pop(0)
 
                 else:
-                    action = 0 # brake
-                
-                trajectory = self.trajectory_planner.trajectory_update_CP(action)
+                    ocrl_action = 0 # brake
+                trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
                 control_action =  self.controller.get_control(self.dynamic_map, trajectory.trajectory, trajectory.desired_speed)
                 action = [control_action.acc, control_action.steering]
-                
-                new_ego_obs, _, done, _ = self.empty_env.step(action)
+                               
+                new_ego_obs, ego_pass , done, _ = self.env.step(action)
 
                 # use transition model to imagine surrounding agents
-                new_obs_list = self.ensemble_transition_model.rollout(obs, action, new_ego_obs)
+                new_obs_list = self.ensemble_transition_model.rollout(obs, ocrl_action, new_ego_obs)
                 worst_confidence_q_list = []
                 for new_obs in new_obs_list:
-                    worst_confidence_q_list.append(self.worst_confidence_Q_network.forward(new_obs))
-                new_obs = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))
-
-                reward = self.calculate_reward(obs, trajectory)
+                    new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
+                    worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy()
+                    worst_confidence_q_list.append(worst_confidence_q)
+                new_obs_idx = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0][0]
+                new_imgaine_obs = new_obs_list[new_obs_idx]
+                
+                if ego_pass:
+                    reward = 10
+                    collision = 0
+                else:
+                    reward, collision = self.calculate_reward(obs, ocrl_action, candidate_trajectories_tuple)
                 
                 # update worst_confidence_value
-                q_values      = self.worst_confidence_Q_network(obs)
-                next_q_values = self.worst_confidence_Q_network(new_imgaine_obs)
-                q_value          = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
-                next_q_value     = next_q_values.max(1)[0]
-                expected_q_value = reward + gamma * next_q_value * (1 - done)
-                loss  = (q_value - expected_q_value.detach()).pow(2) * weights
+                obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
+                new_imgaine_obs  = torch.tensor(self.ensemble_transition_model.normalize_state(new_imgaine_obs)).to(self.device)
+                q_values         = self.worst_confidence_Q_network(obs)
+                next_q_values    = self.worst_confidence_Q_network(new_imgaine_obs)
+                q_value          = q_values.gather(0, torch.tensor(ocrl_action).to(self.device))
+                next_q_value     = next_q_values.max(0)[0]
+
+                expected_q_value = reward + self.gamma * next_q_value * (1 - done)
+                loss  = (q_value - expected_q_value.detach()).pow(2)
                 loss  = loss.mean()
                     
-                self.optimizer.zero_grad()
+                self.Q_optimizer.zero_grad()
                 loss.backward()
-                self.optimizer.step()
+                self.Q_optimizer.step()
                 
                 obs = new_obs
-                                
+                
+                if collision:
+                    print("imagine collision")
+                
+                if collision or done:
+                    break
+                    
                 steps += 1
         
         return None
@@ -312,24 +352,46 @@ class OCRL_Agent():
         self.trajectory_planner.clear_buff(clean_csp=False)
         self.history_obs_list = []
   
-    def calculate_reward(obs, trajectory):
+    def calculate_reward(self, obs, ocrl_action, candidate_trajectories_tuple):
+        collision = self.colli_check(obs)
+        if collision:
+            r_c = -500
+        else:
+            r_c = 0
         
-        
-        return reward
-  
-    def colli_check(self, ego_trajectory, rollout_trajectory):
-        for i in range(self.future_frame):
-            ego_x = ego_trajectory[0].x[i]
-            ego_y = ego_trajectory[0].y[i]
-            ego_yaw = ego_trajectory[0].yaw[i]
+        if ocrl_action == 0:
+            r_ego = -50
+        else:
+            trajectory = candidate_trajectories_tuple[ocrl_action-1]
+            Jp = sum(np.power(trajectory[0].d_ddd[0:1], 2))
+            Js = sum(np.power(trajectory[0].s_ddd[0:1], 2))
+
+            tfps = [self.trajectory_planner.target_speed-x for x in trajectory[0].s_d[0:1]]
+            ds = sum(np.power(tfps, 2))
+            dd = sum(np.power(trajectory[0].d[0:1], 2))
+
+            cd = 0.1 * Jp + 0.1 * 0.1 * 1 + 0.05 * dd
+            cv = 0.1 * Js + 0.1 * 0.1 * 1 + 0.05 * ds
+            r_ego = -(1.0 * cd + 1.0 * cv)
             
-            for one_vehicle_path in rollout_trajectory:
-                obst_x = one_vehicle_path.x[i]
-                obst_y = one_vehicle_path.y[i]
-                obst_yaw = one_vehicle_path.yaw[i]
-                
-                if self.colli_between_vehicle(ego_x, ego_y, ego_yaw, obst_x, obst_y, obst_yaw):
-                    return True
+        reward = r_c + r_ego
+            
+        
+        return reward, collision
+  
+    def colli_check(self, obs):
+        ego_x = obs[0][0]
+        ego_y = obs[0][1]
+        ego_yaw = obs[0][4]
+
+
+        for i in range(1,self.agent_num):
+            obst_x = obs[i][0]
+            obst_y = obs[i][1]
+            obst_yaw = obs[i][4]
+            
+            if self.colli_between_vehicle(ego_x, ego_y, ego_yaw, obst_x, obst_y, obst_yaw):
+                return True
                 
         return False
     
@@ -343,7 +405,7 @@ class OCRL_Agent():
         obst_front_y = obst_y+np.sin(obst_yaw)*self.move_gap
         obst_back_x = obst_x-np.cos(obst_yaw)*self.move_gap
         obst_back_y = obst_y-np.sin(obst_yaw)*self.move_gap
-        
+
         d = (ego_front_x - obst_front_x)**2 + (ego_front_y - obst_front_y)**2
         if d <= self.check_radius**2: 
             return True
@@ -363,7 +425,7 @@ class OCRL_Agent():
 class OCRL_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_bias_x, obs_bias_y, 
                  obs_scale, throttle_scale, steer_scale, device, training, dt):
-        super(DCP_Transition_Model, self).__init__()
+        super(OCRL_Transition_Model, self).__init__()
         
         self.ensemble_num = ensemble_num
         self.history_frame = history_frame
@@ -407,25 +469,20 @@ class OCRL_Transition_Model():
         self.one_trajectory = []
         self.infer_obs_list = []
     
-
     def rollout(self, obs, action, new_ego_obs):
-    
-        if ensemble_index > self.ensemble_num-1:
-            print("[Warning]: Ensemble Index out of index!")
-            return None
-        
+            
         vehicle_num = 0
-        
-        for i in range(len(obs[0])):
-            if obs[0][i][0] != -999: # use -100 as signal, very unstable
+        for i in range(len(obs)):
+            if obs[i][0] != -999: # use -999 as signal, very unstable
                 vehicle_num += 1
-        
-        
-        obs = self.normalize_state(obs)        
-        obs = torch.tensor(obs).to(self.device)
 
-        for i in range(self.ensemble_num):
-            predict_action, sigma = self.ensemble_models[ensemble_index](obs)
+        
+        torch_obs = torch.tensor(self.normalize_state(obs)).to(self.device)   
+
+        next_obs_list = []
+
+        for ensemble_index in range(self.ensemble_num):
+            predict_action, sigma = self.ensemble_models[ensemble_index](torch_obs)
             predict_action = predict_action.cpu().detach().numpy()
             
             
@@ -440,38 +497,41 @@ class OCRL_Transition_Model():
                 delta = predict_action[j*2*self.future_frame+1] * self.steer_scale
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(x, y, yaw, velocity, throttle, delta)
                 next_obs.append([x,y,velocity*math.cos(yaw),velocity*math.sin(yaw),yaw])
+                
+            for i in range(0,self.agent_num-vehicle_num):
+                next_obs.append([-999,-999,0,0,0])
             next_obs_list.append(next_obs)
         
         return next_obs_list
   
-    def normalize_state(self, history_obs):
+    def normalize_state(self, obs):
         normalize_state = []
-        for obs in history_obs:
-            normalize_obs = copy.deepcopy(obs)
-            obs_length = self.agent_num
-            for i in range(self.agent_num):
-                if obs[i][0] == -999:
-                    normalize_obs[i][0] = 20
-                    normalize_obs[i][1] = 0
-                else:
-                    normalize_obs[i][0] = obs[i][0] - self.obs_bias_x
-                    normalize_obs[i][1] = obs[i][1] - self.obs_bias_y
-            normalize_state.append(normalize_obs)
+        normalize_obs = copy.deepcopy(obs)
+        obs_length = self.agent_num
+        for i in range(self.agent_num):
+            if obs[i][0] == -999:
+                normalize_obs[i][0] = 20
+                normalize_obs[i][1] = 0
+            else:
+                normalize_obs[i][0] = obs[i][0] - self.obs_bias_x
+                normalize_obs[i][1] = obs[i][1] - self.obs_bias_y
             
-        return (np.array(normalize_state).flatten()/self.obs_scale) # flatten to list
+        return (np.array(normalize_obs).flatten()/self.obs_scale) # flatten to list
     
     def update_model(self, obs, new_obs):
-        obs = self.normalize_state(obs)
-        obs = torch.tensor(obs).to(self.device)
 
+       
+        target_action = self.get_target_action_from_obs(obs, new_obs) # Run before normalize!
+        torch_obs = torch.tensor(self.normalize_state(obs)).to(self.device) 
+      
         # target: output action
-        target_action = self.get_target_action_from_obs(obs, new_obs)
         target_action = np.array(target_action).flatten().tolist()
         target_action = torch.tensor(target_action).to(self.device)
 
         for i in range(self.ensemble_num):
             # compute loss
-            predict_action, sigma = self.ensemble_models[i](obs)
+
+            predict_action, sigma = self.ensemble_models[i](torch_obs)
             diff = (predict_action - target_action) / sigma
             loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
             print("------------loss", loss)
@@ -483,52 +543,31 @@ class OCRL_Transition_Model():
             
         return None
  
-    def get_target_action_from_obs(self, one_trajectory):
+    def get_target_action_from_obs(self, obs, new_obs):
 
         vehicle_num = 0
-        for i in range(len(one_trajectory[0])):
-            if one_trajectory[0][i][0] != -999: # use -100 as signal, very unstable
+        for i in range(len(obs)):
+            if obs[i][0] != -999: # use -999 as signal, very unstable
                 vehicle_num += 1
                 
         action_list = []
         for j in range(0, vehicle_num):
             vehicle_action = []
-            # print("one__trajecctory")
-            for i in range(0, self.future_frame):
-                x1 = one_trajectory[self.history_frame-1+i][j][0]
-                y1 = one_trajectory[self.history_frame-1+i][j][1]
-                yaw1 = one_trajectory[self.history_frame-1+i][j][4]
-                v1 = math.sqrt(one_trajectory[self.history_frame-1+i][j][2]
-                               ** 2 + one_trajectory[self.history_frame-1+i][j][3] ** 2)
-                x2 = one_trajectory[self.history_frame+i][j][0]
-                y2 = one_trajectory[self.history_frame+i][j][1]
-                yaw2 = one_trajectory[self.history_frame+i][j][4]
-                v2 = math.sqrt(one_trajectory[self.history_frame+i][j][2]
-                               ** 2 + one_trajectory[self.history_frame+i][j][3] ** 2)
-                throttle, delta = self.kbm.calculate_a_from_data(
-                    x1, y1, yaw1, v1, x2, y2, yaw2, v2)
-                # print("get_target_action1",x1, y1, yaw1)
-                # print("get_target_action2",x2, y2, yaw2)
-                # print("get_target_action3",throttle, delta)
+            x1 = obs[j][0]
+            y1 = obs[j][1]
+            yaw1 = obs[j][4]
+            v1 = math.sqrt(obs[j][2]** 2 + obs[j][3] ** 2)
+            x2 = new_obs[j][0]
+            y2 = new_obs[j][1]
+            yaw2 = new_obs[j][4]
+            v2 = math.sqrt(new_obs[j][2] ** 2 + new_obs[j][3] ** 2)
+            throttle, delta = self.kbm.calculate_a_from_data(
+                x1, y1, yaw1, v1, x2, y2, yaw2, v2)
 
-                vehicle_action.append(throttle/self.throttle_scale)
-                vehicle_action.append(delta/self.steer_scale)
+
+            vehicle_action.append(throttle/self.throttle_scale)
+            vehicle_action.append(delta/self.steer_scale)
             action_list.append(vehicle_action)
-
-            # check this action calculation
-            # x = one_trajectory[self.history_frame-1][j][0]
-            # y = one_trajectory[self.history_frame-1][j][1]
-            # yaw = one_trajectory[self.history_frame-1][j][4]
-            # velocity = math.sqrt(one_trajectory[self.history_frame-1][j][2]
-            #                 ** 2 + one_trajectory[self.history_frame-1][j][3] ** 2)
-            
-            # for k in range(0, self.future_frame):
-            #     throttle = vehicle_action[2*k] * self.throttle_scale
-            #     delta = vehicle_action[2*k+1] * self.steer_scale
-            #     x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(
-            #         x, y, yaw, velocity, throttle, delta)
-            # print("dx",x-one_trajectory[-1][j][0])
-            # print("dy",y-one_trajectory[-1][j][1])
                 
         for k in range (self.agent_num - vehicle_num):
             vehicle_action = []
@@ -593,9 +632,9 @@ class Q_network(nn.Module):
     
     def act(self, state, epsilon):
         if random.random() > epsilon:
-            state   = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
+            # state   = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
             q_value = self.forward(state)
-            action  = q_value.max(1)[1].data[0]
+            action  = q_value.max(0)[1].data
         else:
             action = random.randrange(self.num_actions)
         return action

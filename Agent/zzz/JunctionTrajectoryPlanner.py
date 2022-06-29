@@ -276,7 +276,7 @@ class JunctionTrajectoryPlanner(object):
         self.all_trajectory = path_tuples
         sorted_fplist = sorted(path_tuples, key=lambda path_tuples: path_tuples[1])
         
-        # print("How many action?",len(sorted_fplist))
+        #print("How many action?",len(sorted_fplist))
 
         sorted_fplist = self.check_paths(sorted_fplist)
         t3 = time.time()
