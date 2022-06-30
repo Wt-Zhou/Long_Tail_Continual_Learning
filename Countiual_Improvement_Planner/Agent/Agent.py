@@ -8,6 +8,7 @@ import sys
 import time
 from math import atan2
 
+import carla
 import gym
 import matplotlib.pyplot as plt
 import numba
@@ -17,6 +18,7 @@ import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from carla import BoundingBox, Location, Rotation, Vector3D
 from joblib import Parallel, delayed
 from numba import jit
 from numpy import clip, cos, sin, tan
@@ -136,7 +138,7 @@ class OCRL_Agent():
         self.env = env
         
         # transition model parameter        
-        self.ensemble_num = 2
+        self.ensemble_num = 50
         self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 1 
@@ -149,8 +151,8 @@ class OCRL_Agent():
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         
-        self.rollout_times = 30
-        self.rollout_length = 100
+        self.rollout_times = 10
+        self.rollout_length = 200
         self.dt = 0.1
         self.gamma = 0.99
         
@@ -279,12 +281,12 @@ class OCRL_Agent():
         
         for i in range(self.rollout_times):
             print("Start_rollout")
-            s_0 = self.env.reset(empty=True)
+            empty_obs = self.env.reset(empty=True)
             self.clear_buff()
+            
+            obs = np.array(s_0)
 
             for frame_idx in range(0, self.rollout_length):
-                obs = np.array(s_0)
-                                
                 self.dynamic_map.update_map_from_list_obs(obs)
                 candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
                 self.history_obs_list.append(obs)
@@ -314,6 +316,9 @@ class OCRL_Agent():
                 new_obs_idx = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0][0]
                 new_imgaine_obs = new_obs_list[new_obs_idx]
                 
+                # Draw debug
+                self.draw_debug(self.env, obs, new_imgaine_obs)
+                  
                 if ego_pass:
                     reward = 10
                     collision = 0
@@ -322,9 +327,9 @@ class OCRL_Agent():
                 
                 # update worst_confidence_value
                 obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
-                new_imgaine_obs  = torch.tensor(self.ensemble_transition_model.normalize_state(new_imgaine_obs)).to(self.device)
+                nor_imgaine_obs  = torch.tensor(self.ensemble_transition_model.normalize_state(new_imgaine_obs)).to(self.device)
                 q_values         = self.worst_confidence_Q_network(obs)
-                next_q_values    = self.worst_confidence_Q_network(new_imgaine_obs)
+                next_q_values    = self.worst_confidence_Q_network(nor_imgaine_obs)
                 q_value          = q_values.gather(0, torch.tensor(ocrl_action).to(self.device))
                 next_q_value     = next_q_values.max(0)[0]
 
@@ -336,18 +341,32 @@ class OCRL_Agent():
                 loss.backward()
                 self.Q_optimizer.step()
                 
-                obs = new_obs
+                obs = new_imgaine_obs
                 
                 if collision:
-                    print("imagine collision")
+                    print("[Imagination]: Collision!")
                 
                 if collision or done:
+                    print("[Imagination]: Done")
                     break
                     
                 steps += 1
-        
+            print("[Imagination]: Finish")
+
         return None
-   
+    
+    def draw_debug(self, env, obs, new_imgaine_obs):
+        vehicle_num = 0
+        for i in range(len(obs)):
+            if obs[i][0] != -999: # use -999 as signal, very unstable
+                vehicle_num += 1
+        for j in range(1, vehicle_num):
+            rotation = Rotation(0,obs[j][4]/3.14*180)
+            location = Location(x=obs[j][0], y=obs[j][1],z=0.5)
+            box = BoundingBox(location, Vector3D(3,1,0.1))
+            
+            env.debug.draw_box(box, rotation, thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.11)
+            
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)
         self.history_obs_list = []
@@ -456,7 +475,7 @@ class OCRL_Transition_Model():
             
         # transition vehicle model
         self.wheelbase = 2.96
-        self.max_steer = np.deg2rad(80)
+        self.max_steer = np.deg2rad(30)
         self.dt = dt
         self.c_r = 0.01
         self.c_a = 0.05
@@ -484,8 +503,7 @@ class OCRL_Transition_Model():
         for ensemble_index in range(self.ensemble_num):
             predict_action, sigma = self.ensemble_models[ensemble_index](torch_obs)
             predict_action = predict_action.cpu().detach().numpy()
-            
-            
+                        
             next_obs = [new_ego_obs[0]]
             for j in range(1, vehicle_num):  # exclude ego vehicle
 
@@ -495,9 +513,10 @@ class OCRL_Transition_Model():
                 yaw = obs[j][4]
                 throttle = predict_action[j*2*self.future_frame] * self.throttle_scale
                 delta = predict_action[j*2*self.future_frame+1] * self.steer_scale
+
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(x, y, yaw, velocity, throttle, delta)
                 next_obs.append([x,y,velocity*math.cos(yaw),velocity*math.sin(yaw),yaw])
-                
+
             for i in range(0,self.agent_num-vehicle_num):
                 next_obs.append([-999,-999,0,0,0])
             next_obs_list.append(next_obs)
@@ -580,7 +599,7 @@ class OCRL_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.1, b=0.1)
+            nn.init.uniform_(m.weight, a=-0.5, b=0.5)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式
