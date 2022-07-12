@@ -138,21 +138,21 @@ class OCRL_Agent():
         self.env = env
         
         # transition model parameter        
-        self.ensemble_num = 50
+        self.ensemble_num = 1
         self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
-        self.obs_scale = 10
-        self.obs_bias_x = 130
-        self.obs_bias_y = 200
-        self.throttle_scale = 0.5
-        self.steer_scale = 0.1
+        self.obs_scale = 1
+        self.obs_bias_x = 133
+        self.obs_bias_y = 189
+        self.throttle_scale = 2
+        self.steer_scale = 1
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         
-        self.rollout_times = 10
-        self.rollout_length = 200
+        self.rollout_times = 1
+        self.rollout_length = 1
         self.dt = 0.1
         self.gamma = 0.99
         
@@ -166,7 +166,7 @@ class OCRL_Agent():
                                                               self.device, training, self.dt)
         
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters())
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.005)
 
         self.collect_data = []
         self.trained_replay_buffer = Replay_Buffer(obs_shape=env.observation_space.shape,
@@ -187,7 +187,7 @@ class OCRL_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        self.robot_radius = 1.2 # 
+        self.robot_radius = 2.0 # 
         self.move_gap = 2.5
         self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
@@ -235,6 +235,8 @@ class OCRL_Agent():
             # Reset environment and get initial state
             obs = env.reset()
             done = False
+            
+            efficiency = 0
             # Loop over steps
             while True:
                 obs = np.array(obs)
@@ -246,17 +248,19 @@ class OCRL_Agent():
                 self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
                 
                 obs = new_obs
+                efficiency += math.sqrt(obs[0][2]**2+obs[0][3]**2) 
 
                 if done:
                     self.clear_buff()
                     break
+            print("efficiency", efficiency)
                       
         return None
 
     def epsilon_by_frame(self, frame_idx):
         epsilon_start = 1.0
-        epsilon_final = 0.01
-        epsilon_decay = 500
+        epsilon_final = 0.2
+        epsilon_decay = self.rollout_times
         return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
            
     def update_ensemble_transition_model(self):
@@ -335,6 +339,7 @@ class OCRL_Agent():
 
                 expected_q_value = reward + self.gamma * next_q_value * (1 - done)
                 loss  = (q_value - expected_q_value.detach()).pow(2)
+                print("q_loss",loss)
                 loss  = loss.mean()
                     
                 self.Q_optimizer.zero_grad()
@@ -501,7 +506,7 @@ class OCRL_Transition_Model():
         next_obs_list = []
 
         for ensemble_index in range(self.ensemble_num):
-            predict_action, sigma = self.ensemble_models[ensemble_index](torch_obs)
+            predict_action = self.ensemble_models[ensemble_index].sample_prediction(torch_obs)
             predict_action = predict_action.cpu().detach().numpy()
                         
             next_obs = [new_ego_obs[0]]
@@ -538,7 +543,6 @@ class OCRL_Transition_Model():
         return (np.array(normalize_obs).flatten()/self.obs_scale) # flatten to list
     
     def update_model(self, obs, new_obs):
-
        
         target_action = self.get_target_action_from_obs(obs, new_obs) # Run before normalize!
         torch_obs = torch.tensor(self.normalize_state(obs)).to(self.device) 
@@ -553,7 +557,9 @@ class OCRL_Transition_Model():
             predict_action, sigma = self.ensemble_models[i](torch_obs)
             diff = (predict_action - target_action) / sigma
             loss = torch.mean(0.5 * torch.pow(diff, 2) + torch.log(sigma))  
-            print("------------loss", loss)
+            print("-- transition loss", loss)
+            print("------------loss", predict_action)
+            print("------------loss", target_action)
 
             # train
             self.ensemble_optimizer[i].zero_grad()

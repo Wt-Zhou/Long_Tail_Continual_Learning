@@ -37,7 +37,7 @@ OBSTACLES_CONSIDERED = 3
 
 global start_point
 start_point = Transform()
-start_point.location.x = 150
+start_point.location.x = 140
 start_point.location.y = 187
 start_point.location.z = 0.5
 start_point.rotation.pitch = 0
@@ -75,9 +75,9 @@ class CarEnv_02_Intersection_fixed:
         settings.no_rendering_mode = False
         self.dt = 0.1
         settings.fixed_delta_seconds = self.dt # Warning: When change simulator, the delta_t in controller should also be change.
-        settings.substepping = True
-        settings.max_substep_delta_time = 0.01  # fixed_delta_seconds <= max_substep_delta_time * max_substeps
-        settings.max_substeps = 10
+        # settings.substepping = True
+        # settings.max_substep_delta_time = 0.01  # fixed_delta_seconds <= max_substep_delta_time * max_substeps
+        # settings.max_substeps = 10
         settings.synchronous_mode = True
         self.world.apply_settings(settings)
         self.free_traffic_lights(self.world)
@@ -190,7 +190,7 @@ class CarEnv_02_Intersection_fixed:
         self.ref_path_array = dense_polyline2d(ref_path_ori, 2)
         self.ref_path_tangets = np.zeros(len(self.ref_path_array))
 
-    def ego_vehicle_stuck(self, stay_thres = 10):        
+    def ego_vehicle_stuck(self, stay_thres = 3):        
         ego_vehicle_velocity = math.sqrt(self.ego_vehicle.get_velocity().x ** 2 + self.ego_vehicle.get_velocity().y ** 2 + self.ego_vehicle.get_velocity().z ** 2)
         if ego_vehicle_velocity < 0.1:
             pass
@@ -512,7 +512,7 @@ class CarEnv_02_Intersection_fixed:
         spawn_vehicles.append(transform)
         transform = Transform()
         transform.location.x = 136 
-        transform.location.y = 227
+        transform.location.y = 198
         transform.location.z = 1
         transform.rotation.pitch = 0
         transform.rotation.yaw = -90

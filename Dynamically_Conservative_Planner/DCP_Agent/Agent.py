@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from joblib import Parallel, delayed
 from numba import jit
 from numpy import clip, cos, sin, tan
-from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
+# from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
 from Agent.zzz.controller import Controller

@@ -14,7 +14,7 @@ import carla
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
-from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
+# from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from Test_Scenarios.TestScenario_Town02_Fixed_State import \
     CarEnv_02_Intersection_fixed_state
 from tqdm import tqdm
@@ -23,8 +23,8 @@ from DCP_Agent.Agent import DCP_Agent
 from results import Results
 
 TEST_EPISODES = 300
-LOAD_STEP = 160000
-ROLLOUT_TIMES = 10
+LOAD_STEP = 10000
+ROLLOUT_TIMES = 1
 
 if __name__ == '__main__':
 
@@ -91,7 +91,7 @@ if __name__ == '__main__':
                     for i in range(len(rollout_trajectory[0])-1):
                         env.debug.draw_line(begin=carla.Location(x=rollout_trajectory[0][i],y=rollout_trajectory[1][i],z=env.ego_vehicle.get_location().z+1),
                                             end=carla.Location(x=rollout_trajectory[0][i+1],y=rollout_trajectory[1][i+1],z=env.ego_vehicle.get_location().z+1), 
-                                            thickness=0.2,  color=carla.Color(255, 0, 0), life_time=4)
+                                            thickness=0.2,  color=carla.Color(255, 0, 0), life_time=1)
         
         for trajectory in agent.trajectory_planner.all_trajectory:
             for i in range(len(trajectory[0].x)-1):
@@ -100,7 +100,7 @@ if __name__ == '__main__':
                 #                      size=0.04, color=carla.Color(r=0,g=0,b=255), life_time=0.11)
                 env.debug.draw_line(begin=carla.Location(x=trajectory[0].x[i],y=trajectory[0].y[i],z=env.ego_vehicle.get_location().z+0.1),
                                     end=carla.Location(x=trajectory[0].x[i+1],y=trajectory[0].y[i+1],z=env.ego_vehicle.get_location().z+0.1), 
-                                    thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=4)
+                                    thickness=0.1, color=carla.Color(r=0,g=0,b=255), life_time=1)
             
         for i in range(ROLLOUT_TIMES):
     
@@ -123,7 +123,7 @@ if __name__ == '__main__':
                 cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * trajectory.d[i]**2
                 cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
                 g_value -= 1.0 * cd + 1.0 * cv
-                
+                time.sleep(0.05)
                 new_obs, reward, done, collision = env.step(action)   
                 agent.dynamic_map.update_map_from_list_obs(new_obs)
                 if done:
