@@ -178,6 +178,96 @@ class Replay_Buffer(object):
             self.not_dones[start:end] = payload[5]
             self.idx = end
 
+class Ensemble_Replay_Buffer(object):
+    """Buffer to store environment transitions."""
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device, ensemble_num):
+        self.capacity = capacity
+        self.batch_size = batch_size
+        self.device = device
+
+        # the proprioceptive obs is stored as float32, pixels obs as uint8
+        obs_dtype = np.float64 if len(obs_shape) == 1 else np.float64
+
+        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.k_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.next_obses_list = []
+        self.ensemble_number = ensemble_num
+        for i in range(ensemble_num):
+            self.next_obses_list.append(np.empty((capacity, *obs_shape), dtype=obs_dtype))
+        self.actions = np.empty((capacity, 1), dtype=np.float32)
+        self.rewards = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+
+        self.idx = 0
+        self.last_save = 0
+        self.full = False
+
+    def add(self, obs, action, reward, next_obs_list, done):
+        np.copyto(self.obses[self.idx], obs)
+        np.copyto(self.actions[self.idx], action)
+        np.copyto(self.rewards[self.idx], reward)
+        for i in range(self.ensemble_number):
+            np.copyto(self.next_obses_list[i][self.idx], next_obs_list[i])
+        np.copyto(self.not_dones[self.idx], not done)
+
+        self.idx = (self.idx + 1) % self.capacity
+        self.full = self.full or self.idx == 0
+
+    def sample(self, k=False):
+        idxs = np.random.randint(0, self.capacity if self.full else self.idx, size=self.batch_size) 
+        obses = self.obses[idxs]
+        actions = self.actions[idxs]
+        rewards = self.rewards[idxs]
+        next_obses_list = []
+        for i in range(self.ensemble_number):
+            next_obses_list.append(self.next_obses_list[i][idxs])
+        not_dones = self.not_dones[idxs]
+        if k:
+            return obses, actions, rewards, next_obses_list, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
+        return obses, actions, rewards, next_obses_list, not_dones
+    
+    def get(self, idxs, k=False):
+        idxs = np.array([idxs]) 
+        obses = torch.as_tensor(self.obses[idxs], device=self.device).float()
+        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
+        next_obses_list = []
+        for i in range(self.ensemble_number):
+            next_obses_list.append(torch.as_tensor(self.next_obses_list[i][idxs], device=self.device).float())
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        if k:
+            return obses, actions, rewards, next_obses_list, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
+        return obses, actions, rewards, next_obses_list, not_dones
+
+    def save(self, save_dir):
+        if self.idx == self.last_save:
+            return
+        path = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
+        payload = [
+            self.obses[self.last_save:self.idx],
+            self.next_obses[self.last_save:self.idx],
+            self.actions[self.last_save:self.idx],
+            self.rewards[self.last_save:self.idx],
+            self.not_dones[self.last_save:self.idx]
+        ]
+        self.last_save = self.idx
+        torch.save(payload, path)
+
+    def load(self, save_dir):
+        chunks = os.listdir(save_dir)
+        chucks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
+        for chunk in chucks:
+            start, end = [int(x) for x in chunk.split('.')[0].split('_')]
+            path = os.path.join(save_dir, chunk)
+            payload = torch.load(path)
+            assert self.idx == start
+            self.obses[start:end] = payload[0]
+            self.next_obses[start:end] = payload[1]
+            self.actions[start:end] = payload[2]
+            self.rewards[start:end] = payload[3]
+            self.not_dones[start:end] = payload[5]
+            self.idx = end
+
 
     
 if __name__ == '__main__':

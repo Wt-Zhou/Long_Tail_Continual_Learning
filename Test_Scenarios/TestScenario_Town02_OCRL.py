@@ -19,7 +19,6 @@ from collections import deque
 from random import randint
 
 import carla
-import cv2
 import gym
 import numpy as np
 from Agent.zzz.dynamic_map import Lane, Lanepoint, Vehicle
@@ -44,7 +43,6 @@ start_point.rotation.pitch = 0
 start_point.rotation.yaw = 180
 start_point.rotation.roll = 0
 
-
 global goal_point
 goal_point = Transform()
 goal_point.location.x = 131
@@ -53,6 +51,15 @@ goal_point.location.z = 0
 goal_point.rotation.pitch = 0
 goal_point.rotation.yaw = 0 
 goal_point.rotation.roll = 0
+
+global camera_transform
+camera_transform = Transform()
+camera_transform.location.x = 136
+camera_transform.location.y = 199
+camera_transform.location.z = 60
+camera_transform.rotation.pitch = -90
+camera_transform.rotation.yaw = -90
+camera_transform.rotation.roll = 0
 
 class CarEnv_02_Intersection_fixed:
 
@@ -81,6 +88,12 @@ class CarEnv_02_Intersection_fixed:
         settings.synchronous_mode = True
         self.world.apply_settings(settings)
         self.free_traffic_lights(self.world)
+        
+        # set simulation view
+        spectator = self.world.get_spectator()
+        global camera_transform
+        spectator.set_transform(camera_transform)
+
 
         self.tm = self.client.get_trafficmanager(8000)
         # self.tm.set_hybrid_physics_mode(True)
@@ -478,26 +491,31 @@ class CarEnv_02_Intersection_fixed:
 
         # Step reward
         reward = 0
+        ego_status = 0
         # If finish
         self.done = False
         if self.ego_vehicle_collision_sign:
             self.collision_num += + 1
             self.done = True
             reward = 0
+            ego_status = 1
             print("[CARLA]: Collision!")
         
         if self.ego_vehicle_pass():
             self.done = True
             reward = 1
+            ego_status = 2
+
             print("[CARLA]: Successful!")
 
         elif self.ego_vehicle_stuck():
             self.stuck_num += 1
-            reward = -0.0
+            reward = 0
+            ego_status = 3
             self.done = True
             print("[CARLA]: Stuck!")
 
-        return state, reward, self.done, self.ego_vehicle_collision_sign
+        return state, reward, self.done, ego_status
 
     def init_train_case(self):
         self.case_list = []
@@ -510,14 +528,14 @@ class CarEnv_02_Intersection_fixed:
         transform.rotation.yaw = 0
         transform.rotation.roll = 0
         spawn_vehicles.append(transform)
-        transform = Transform()
-        transform.location.x = 136 
-        transform.location.y = 198
-        transform.location.z = 1
-        transform.rotation.pitch = 0
-        transform.rotation.yaw = -90
-        transform.rotation.roll = 0
-        spawn_vehicles.append(transform)
+        # transform = Transform()
+        # transform.location.x = 136 
+        # transform.location.y = 198
+        # transform.location.z = 1
+        # transform.rotation.pitch = 0
+        # transform.rotation.yaw = -90
+        # transform.rotation.roll = 0
+        # spawn_vehicles.append(transform)
         self.case_list.append(spawn_vehicles)
         
         # one vehicle from left

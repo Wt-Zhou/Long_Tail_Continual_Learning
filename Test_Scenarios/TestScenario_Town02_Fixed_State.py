@@ -19,7 +19,6 @@ from collections import deque
 from random import randint
 
 import carla
-import cv2
 import gym
 import numpy as np
 from Agent.zzz.dynamic_map import Lane, Lanepoint, Vehicle

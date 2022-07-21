@@ -1,22 +1,9 @@
 import glob
+import math
 import os
 import os.path as osp
-import sys
-
-try:
-	sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
-		sys.version_info.major,
-		sys.version_info.minor,
-		'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
-except IndexError:
-	pass
-try:
-	sys.path.append(glob.glob("/home/icv/.local/lib/python3.6/site-packages/")[0])
-except IndexError:
-	pass
-
-import math
 import random
+import sys
 import time
 
 import carla
@@ -30,7 +17,23 @@ from Agent.zzz.dynamic_map import DynamicMap
 from Agent.zzz.JunctionTrajectoryPlanner_simple_predict import \
     JunctionTrajectoryPlanner
 # from results import Results
-from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
+from Test_Scenarios.TestScenario_Town02_Fixed_State import \
+    CarEnv_02_Intersection_fixed_state
+
+# try:
+# 	sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
+# 		sys.version_info.major,
+# 		sys.version_info.minor,
+# 		'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
+# except IndexError:
+# 	pass
+# try:
+# 	sys.path.append(glob.glob("/home/icv/.local/lib/python3.6/site-packages/")[0])
+# except IndexError:
+# 	pass
+
+
+
 
 # from Agent.zzz.CP import CP, Imagine_Model
 EPISODES=62
@@ -39,12 +42,13 @@ if __name__ == '__main__':
 
     # Create environment
     
-    env = CarEnv_02_Intersection_fixed()
+    env = CarEnv_02_Intersection_fixed_state()
 
     # Create Agent
     trajectory_planner = JunctionTrajectoryPlanner()
     controller = Controller()
     dynamic_map = DynamicMap()
+    dynamic_map.update_ref_path(env)
     target_speed = 30/3.6 
     
     # results = Results(trajectory_planner.obs_prediction.gnn_predictin_model.history_frame)
@@ -70,7 +74,7 @@ if __name__ == '__main__':
         # Loop over steps
         while True:
             obs = np.array(obs)
-            dynamic_map.update_map_from_list_obs(obs, env)
+            dynamic_map.update_map_from_list_obs(obs)
             rule_trajectory, rule_action = trajectory_planner.trajectory_update(dynamic_map)
             rule_trajectory = trajectory_planner.trajectory_update_CP(rule_action, rule_trajectory)
             # Control

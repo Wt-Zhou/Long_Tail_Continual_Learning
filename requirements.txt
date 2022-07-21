@@ -1,0 +1,11 @@
+gym
+joblib==1.1.0
+matplotlib==3.5.2
+numba==0.55.2
+numpy
+pandas==1.4.3
+rtree==1.0.0
+scipy==1.8.1
+sumolib==1.14.0
+torch_geometric==2.0.4
+tqdm==4.64.0

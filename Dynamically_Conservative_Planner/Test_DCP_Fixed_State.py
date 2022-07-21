@@ -1,20 +1,18 @@
+import copy
 import glob
+import math
 import os
 import os.path as osp
+import random
 import sys
+import time
 
 sys.path.append("..")
-
-import copy
-import math
-import random
-import time
 
 import carla
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
-# from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
 from Test_Scenarios.TestScenario_Town02_Fixed_State import \
     CarEnv_02_Intersection_fixed_state
 from tqdm import tqdm
@@ -123,7 +121,6 @@ if __name__ == '__main__':
                 cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * trajectory.d[i]**2
                 cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
                 g_value -= 1.0 * cd + 1.0 * cv
-                time.sleep(0.05)
                 new_obs, reward, done, collision = env.step(action)   
                 agent.dynamic_map.update_map_from_list_obs(new_obs)
                 if done:
