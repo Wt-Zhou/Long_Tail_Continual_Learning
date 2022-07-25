@@ -196,7 +196,7 @@ class Ensemble_Replay_Buffer(object):
             self.next_obses_list.append(np.empty((capacity, *obs_shape), dtype=obs_dtype))
         self.actions = np.empty((capacity, 1), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
-        self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+        self.dones = np.empty((capacity, 1), dtype=np.float32)
 
         self.idx = 0
         self.last_save = 0
@@ -208,7 +208,7 @@ class Ensemble_Replay_Buffer(object):
         np.copyto(self.rewards[self.idx], reward)
         for i in range(self.ensemble_number):
             np.copyto(self.next_obses_list[i][self.idx], next_obs_list[i])
-        np.copyto(self.not_dones[self.idx], not done)
+        np.copyto(self.dones[self.idx], done)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -221,10 +221,10 @@ class Ensemble_Replay_Buffer(object):
         next_obses_list = []
         for i in range(self.ensemble_number):
             next_obses_list.append(self.next_obses_list[i][idxs])
-        not_dones = self.not_dones[idxs]
+        dones = self.dones[idxs]
         if k:
-            return obses, actions, rewards, next_obses_list, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
-        return obses, actions, rewards, next_obses_list, not_dones
+            return obses, actions, rewards, next_obses_list, dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
+        return obses, actions, rewards, next_obses_list, dones
     
     def get(self, idxs, k=False):
         idxs = np.array([idxs]) 
@@ -234,10 +234,10 @@ class Ensemble_Replay_Buffer(object):
         next_obses_list = []
         for i in range(self.ensemble_number):
             next_obses_list.append(torch.as_tensor(self.next_obses_list[i][idxs], device=self.device).float())
-        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        dones = torch.as_tensor(self.dones[idxs], device=self.device)
         if k:
-            return obses, actions, rewards, next_obses_list, not_dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
-        return obses, actions, rewards, next_obses_list, not_dones
+            return obses, actions, rewards, next_obses_list, dones, torch.as_tensor(self.k_obses[idxs], device=self.device)
+        return obses, actions, rewards, next_obses_list, dones
 
     def save(self, save_dir):
         if self.idx == self.last_save:
@@ -248,7 +248,7 @@ class Ensemble_Replay_Buffer(object):
             self.next_obses[self.last_save:self.idx],
             self.actions[self.last_save:self.idx],
             self.rewards[self.last_save:self.idx],
-            self.not_dones[self.last_save:self.idx]
+            self.dones[self.last_save:self.idx]
         ]
         self.last_save = self.idx
         torch.save(payload, path)
@@ -265,7 +265,7 @@ class Ensemble_Replay_Buffer(object):
             self.next_obses[start:end] = payload[1]
             self.actions[start:end] = payload[2]
             self.rewards[start:end] = payload[3]
-            self.not_dones[start:end] = payload[5]
+            self.dones[start:end] = payload[5]
             self.idx = end
 
 

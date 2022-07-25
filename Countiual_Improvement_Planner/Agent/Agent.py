@@ -145,7 +145,7 @@ class OCRL_Agent():
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
-        self.obs_scale = 1
+        self.obs_scale = 2
         self.obs_bias_x = 133
         self.obs_bias_y = 189
         self.throttle_scale = 2
@@ -153,11 +153,11 @@ class OCRL_Agent():
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         
-        self.rollout_times = 100
-        self.rollout_length = 50
+        self.rollout_times = 20
+        # self.rollout_length = 1
         self.dt = 0.1
-        self.gamma = 0.99
-        self.q_batch_size = 32
+        self.gamma = 0.95
+        self.q_batch_size = 20
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.set_default_tensor_type(torch.DoubleTensor)
@@ -169,7 +169,7 @@ class OCRL_Agent():
                                                               self.device, training, self.dt)
         
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.005)
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
 
         self.collect_data = []
         
@@ -213,6 +213,8 @@ class OCRL_Agent():
         else:
             ocrl_action = 0 # brake
         
+        ocrl_action = 6
+        
         ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
         
         control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
@@ -243,7 +245,8 @@ class OCRL_Agent():
             accumulated_reward = 0
             nor_obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
             worst_confidence_q_list = self.worst_confidence_Q_network.forward(nor_obs).cpu().detach().numpy()
-            worst_confidence_value = np.max(worst_confidence_q_list)
+            # worst_confidence_value = np.max(worst_confidence_q_list)
+            worst_confidence_value = worst_confidence_q_list[6]
 
             # Loop over steps
             step = 0
@@ -286,7 +289,7 @@ class OCRL_Agent():
             done = self.collect_data[0][4]
             self.ensemble_transition_model.update_model(obs, new_obs)
 
-            self.trained_replay_buffer.add(np.array(obs).flatten(), action.cpu(), reward, np.array(new_obs).flatten(), done)
+            self.trained_replay_buffer.add(np.array(obs).flatten(), action, reward, np.array(new_obs).flatten(), done)
             self.collect_data.pop(0)
         return None
      
@@ -305,7 +308,6 @@ class OCRL_Agent():
                                             device=self.device,
                                             ensemble_num=self.ensemble_num)
         
-        steps = 0
         
         for i in range(self.rollout_times):
             # print("[Imagination]: Start_rollout")
@@ -313,8 +315,9 @@ class OCRL_Agent():
             self.clear_buff()
             
             obs = np.array(s_0)
-
-            for frame_idx in range(0, self.rollout_length):
+            steps = 0
+            while True:
+            # for frame_idx in range(0, self.rollout_length):
                 self.dynamic_map.update_map_from_list_obs(obs)
                 candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
                 self.history_obs_list.append(obs)
@@ -329,6 +332,9 @@ class OCRL_Agent():
 
                 else:
                     ocrl_action = 0 # brake
+                
+                ocrl_action = 6    
+                
                 trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
                 control_action =  self.controller.get_control(self.dynamic_map, trajectory.trajectory, trajectory.desired_speed)
                 action = [control_action.acc, control_action.steering]
@@ -350,8 +356,8 @@ class OCRL_Agent():
                 new_imgaine_obs = new_obs_list[new_obs_idx]
                 
                 # Draw debug
-                self.draw_debug(self.env, obs, new_imgaine_obs)
-                  
+                self.draw_debug(self.env, obs)
+
                 if ego_status == 0: 
                     reward, collision = self.calculate_reward(obs, ocrl_action, candidate_trajectories_tuple)
                     if collision:
@@ -359,11 +365,11 @@ class OCRL_Agent():
                         done = True
                 elif ego_status == 1: # ego collid with env
                     # print("[Imagination]: Collision!")
-                    reward = -5
+                    reward = -10
                     collision = 1
                 elif ego_status == 2: # ego pass
                     # print("[Imagination]: Pass!")
-                    reward = 1
+                    reward = 0
                     collision = 0
                 elif ego_status == 3: # ego stuck
                     # print("[Imagination]: Stuck!")
@@ -395,10 +401,12 @@ class OCRL_Agent():
             worst_confidence_q_list = []
             for new_obs in new_obs_list:
                 new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs[0])).to(self.device)
-                worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
+                # worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
+                worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).cpu().detach().numpy()[6] # FIXME
                 worst_confidence_q_list.append(worst_confidence_q)
             worst_next_q_value = np.min(worst_confidence_q_list)
             
+            # print("worst_confidence_q_list",worst_confidence_q_list,worst_next_q_value)
             # update worst_confidence_value
 
             obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs[0])).to(self.device)
@@ -412,9 +420,11 @@ class OCRL_Agent():
             self.Q_optimizer.zero_grad()
             loss.backward()
             self.Q_optimizer.step()
-            # print("Q_loss",loss,q_value.cpu().detach().numpy(),expected_q_value.cpu().detach().numpy())
+            # if done:
+            #     print("reward",reward)
+            #     print("Q_loss",loss,q_value.cpu().detach().numpy(),expected_q_value.cpu().detach().numpy(),done)
         
-    def draw_debug(self, env, obs, new_imgaine_obs):
+    def draw_debug(self, env, obs):
         vehicle_num = 0
         for i in range(len(obs)):
             if obs[i][0] != -999: # use -999 as signal, very unstable
@@ -433,12 +443,12 @@ class OCRL_Agent():
     def calculate_reward(self, obs, ocrl_action, candidate_trajectories_tuple):
         collision = self.colli_check(obs)
         if collision:
-            r_c = -5
+            r_c = -10
         else:
             r_c = 0
         
         if ocrl_action == 0:
-            r_ego = -0.5
+            r_ego = -1
         else:
             trajectory = candidate_trajectories_tuple[ocrl_action-1]
             Jp = sum(np.power(trajectory[0].d_ddd[0:1], 2))
@@ -450,7 +460,7 @@ class OCRL_Agent():
 
             cd = 0.1 * Jp + 0.1 * 0.1 * 1 + 0.05 * dd
             cv = 0.1 * Js + 0.1 * 0.1 * 1 + 0.05 * ds
-            r_ego = -(0.01 * cd + 0.01 * cv)
+            r_ego = -(0.02 * cd + 0.02 * cv)
             
         reward = r_c + r_ego
         # print("r_ego",r_ego)    
@@ -659,7 +669,7 @@ class OCRL_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.5, b=0.5)
+            nn.init.uniform_(m.weight, a=-0.3, b=0.3)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式
