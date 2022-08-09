@@ -25,7 +25,8 @@ from numba import jit
 from numpy import clip, cos, sin, tan
 from tqdm import tqdm
 
-from Agent.drl_library.dqn.replay_buffer import (Ensemble_Replay_Buffer,
+from Agent.drl_library.dqn.replay_buffer import (Ensemble_PrioritizedBuffer,
+                                                 Ensemble_Replay_Buffer,
                                                  Replay_Buffer)
 from Agent.transition_model.KinematicBicycleModel.kinematic_model import \
     KinematicBicycleModel
@@ -140,12 +141,12 @@ class OCRL_Agent():
         self.env = env
         
         # transition model parameter        
-        self.ensemble_num = 10
+        self.ensemble_num = 3
         self.used_ensemble_num = 1
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
-        self.obs_scale = 2
+        self.obs_scale = 1
         self.obs_bias_x = 133
         self.obs_bias_y = 189
         self.throttle_scale = 2
@@ -153,11 +154,11 @@ class OCRL_Agent():
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
         
-        self.rollout_times = 20
+        self.rollout_times = 1000
         # self.rollout_length = 1
         self.dt = 0.1
         self.gamma = 0.95
-        self.q_batch_size = 20
+        self.q_batch_size = 32
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.set_default_tensor_type(torch.DoubleTensor)
@@ -168,8 +169,8 @@ class OCRL_Agent():
                                                               self.throttle_scale, self.steer_scale, 
                                                               self.device, training, self.dt)
         
-        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
+        # self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
+        # self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
 
         self.collect_data = []
         
@@ -213,7 +214,7 @@ class OCRL_Agent():
         else:
             ocrl_action = 0 # brake
         
-        ocrl_action = 6
+        # ocrl_action = 6
         
         ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
         
@@ -245,8 +246,8 @@ class OCRL_Agent():
             accumulated_reward = 0
             nor_obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
             worst_confidence_q_list = self.worst_confidence_Q_network.forward(nor_obs).cpu().detach().numpy()
-            # worst_confidence_value = np.max(worst_confidence_q_list)
-            worst_confidence_value = worst_confidence_q_list[6]
+            worst_confidence_value = np.max(worst_confidence_q_list)
+            # worst_confidence_value = worst_confidence_q_list[6]
 
             # Loop over steps
             step = 0
@@ -267,14 +268,15 @@ class OCRL_Agent():
                 if done:
                     self.clear_buff()
                     break
+            
             print("accumulated_reward", accumulated_reward)
             print("worst_confidence_value", worst_confidence_value)
                       
         return None
 
     def epsilon_by_frame(self, frame_idx):
-        epsilon_start = 1.0
-        epsilon_final = 0.2
+        epsilon_start = 1
+        epsilon_final = 0.1
         epsilon_decay = self.rollout_times
         return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * frame_idx / epsilon_decay)
            
@@ -297,17 +299,18 @@ class OCRL_Agent():
         print("[OCRL] Start Update Worst Confidence Value!")
         
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
+        self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
         self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
         low = np.zeros((self.agent_num, self.agent_dimension), dtype=np.float64)
         high = np.ones((self.agent_num, self.agent_dimension), dtype=np.float64)
         obs_shape = spaces.Box(low, high, dtype=np.float64).shape
-        self.imagine_replay_buffer = Ensemble_Replay_Buffer(obs_shape=obs_shape,
-                                            action_shape=self.env.action_space.shape, # discrete, 1 dimension!
-                                            capacity= 1000000,
-                                            batch_size= 1,
-                                            device=self.device,
-                                            ensemble_num=self.ensemble_num)
-        
+        # self.imagine_replay_buffer = Ensemble_Replay_Buffer(obs_shape=obs_shape,
+        #                                     action_shape=self.env.action_space.shape, # discrete, 1 dimension!
+        #                                     capacity= 1000000,
+        #                                     batch_size= 1,
+        #                                     device=self.device,
+        #                                     ensemble_num=self.ensemble_num)
+        self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=1000000)
         
         for i in range(self.rollout_times):
             # print("[Imagination]: Start_rollout")
@@ -333,7 +336,7 @@ class OCRL_Agent():
                 else:
                     ocrl_action = 0 # brake
                 
-                ocrl_action = 6    
+                # ocrl_action = 6    
                 
                 trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
                 control_action =  self.controller.get_control(self.dynamic_map, trajectory.trajectory, trajectory.desired_speed)
@@ -354,6 +357,14 @@ class OCRL_Agent():
                 
                 new_obs_idx = random.randint(0, len(new_obs_list)-1)
                 new_imgaine_obs = new_obs_list[new_obs_idx]
+                
+                
+                start_obs = torch.tensor(self.ensemble_transition_model.normalize_state(s_0)).to(self.device)
+                # worst_confidence_q = self.worst_confidence_Q_network.forward(start_obs).cpu().detach().numpy()[6] # FIXME
+                with open("worst_Q_record.txt", 'a') as fw:  
+                    fw.write(str(worst_confidence_q)) 
+                    fw.write("\n")
+                # print("=====Wosrt_Q_start",worst_confidence_q)
                 
                 # Draw debug
                 self.draw_debug(self.env, obs)
@@ -379,30 +390,65 @@ class OCRL_Agent():
                     print("Wrong ego_status")
                     
                 self.imagine_replay_buffer.add(obs, ocrl_action, reward, new_obs_list, done)
-                self.update_Q_network()
+                # self.update_Q_network(obs, ocrl_action, reward, new_obs_list, done)
                 
                 if random.random() > epsilon:
                     obs = new_worst_imgaine_obs
                 else:
                     obs = new_imgaine_obs             
+                # obs = new_worst_imgaine_obs
                 
+                steps += 1
+
                 if done:
                     # print("[Imagination]: Done")
+                    self.update_Q_network_with_buffer()
+                    self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
+
                     break
                     
-                steps += 1
         print("[Imagination]: Finish")
 
+        with open("worst_Q_record.txt", 'a') as fw:  
+            fw.write("[Imagination]: Finish") 
+            fw.write("\n")
         return None
     
-    def update_Q_network(self):
+    def update_Q_network(self, obs, ocrl_action, reward, new_obs_list, done):
+        worst_confidence_q_list = []
+        for new_obs in new_obs_list:
+            new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
+            worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
+            # worst_confidence_q = self.target_Q_network.forward(new_obs).cpu().detach().numpy()[6] # FIXME
+            worst_confidence_q_list.append(worst_confidence_q)
+        worst_next_q_value = np.min(worst_confidence_q_list)
+        
+        # print("worst_confidence_q_list",worst_confidence_q_list,worst_next_q_value)
+        # update worst_confidence_value
+
+        obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
+        q_values         = self.worst_confidence_Q_network(obs)
+        q_value          = q_values.gather(0, torch.tensor(int(ocrl_action)).to(self.device))
+        next_q_value     = worst_next_q_value
+        expected_q_value = torch.tensor(reward + self.gamma * next_q_value * (1 - done)).to(self.device)
+        loss  = (q_value - expected_q_value).pow(2)
+        prios = loss + 1e-5
+        loss  = loss.mean()
+            
+        self.Q_optimizer.zero_grad()
+        loss.backward()
+        self.Q_optimizer.step()
+        
+    def update_Q_network_with_buffer(self):
+        
+        # can it accerlarate not using for? the buffer can directly sample n buffers
         for i in range(self.q_batch_size):
-            obs, ocrl_action, reward, new_obs_list, done = self.imagine_replay_buffer.sample()
+            obs, ocrl_action, reward, new_obs_list, done, indices, weights = self.imagine_replay_buffer.sample(1)
             worst_confidence_q_list = []
             for new_obs in new_obs_list:
-                new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs[0])).to(self.device)
-                # worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
-                worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).cpu().detach().numpy()[6] # FIXME
+                new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
+                worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
+                # worst_confidence_q = self.target_Q_network.forward(new_obs).cpu().detach().numpy()[6] # FIXME
                 worst_confidence_q_list.append(worst_confidence_q)
             worst_next_q_value = np.min(worst_confidence_q_list)
             
@@ -411,18 +457,23 @@ class OCRL_Agent():
 
             obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs[0])).to(self.device)
             q_values         = self.worst_confidence_Q_network(obs)
-            q_value          = q_values.gather(0, torch.tensor(int(ocrl_action)).to(self.device))
+            q_value          = q_values.gather(0, torch.tensor(int(ocrl_action[0])).to(self.device))
             next_q_value     = worst_next_q_value
-            expected_q_value = torch.tensor(reward[0] + self.gamma * next_q_value * (1 - done)).to(self.device)
-            loss  = (q_value - expected_q_value).pow(2)
+            expected_q_value = torch.tensor(reward[0] + self.gamma * next_q_value * (1 - done[0])).to(self.device)
+            loss  = (q_value - expected_q_value).pow(2)* torch.tensor(weights).to(self.device)
+            prios = loss + 1e-5
             loss  = loss.mean()
                 
             self.Q_optimizer.zero_grad()
             loss.backward()
             self.Q_optimizer.step()
+            self.imagine_replay_buffer.update_priorities(indices, prios.data.cpu().numpy())
             # if done:
             #     print("reward",reward)
-            #     print("Q_loss",loss,q_value.cpu().detach().numpy(),expected_q_value.cpu().detach().numpy(),done)
+            # print("Q_loss",loss,q_value.cpu().detach().numpy(),expected_q_value.cpu().detach().numpy(),done)
+    
+    def update_target(self, current_model, target_model):
+        target_model.load_state_dict(current_model.state_dict())
         
     def draw_debug(self, env, obs):
         vehicle_num = 0
@@ -434,7 +485,8 @@ class OCRL_Agent():
             location = Location(x=obs[j][0], y=obs[j][1],z=0.5)
             box = BoundingBox(location, Vector3D(3,1,0.1))
             
-            env.debug.draw_box(box, rotation, thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.11)
+            # env.debug.draw_box(box, rotation, thickness=0.2,  color=carla.Color(255, 0, 0), life_time=0.11)
+            env.debug.draw_box(box, rotation, thickness=0.05,  color=carla.Color(255, 0, 0), life_time=20)
             
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)

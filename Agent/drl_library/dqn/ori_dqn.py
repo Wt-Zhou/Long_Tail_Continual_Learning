@@ -1,19 +1,19 @@
 
-import math, random
+import math
+import random
 
 import gym
 import numpy as np
-
 import torch
+import torch.autograd as autograd
 import torch.nn as nn
-import torch.optim as optim
-import torch.autograd as autograd 
 import torch.nn.functional as F
-
-from Agent.drl_library.dqn.replay_buffer import NaivePrioritizedBuffer, Replay_Buffer
-from Agent.zzz.JunctionTrajectoryPlanner import JunctionTrajectoryPlanner
+import torch.optim as optim
+from Agent.drl_library.dqn.replay_buffer import (NaivePrioritizedBuffer,
+                                                 Replay_Buffer)
 from Agent.zzz.controller import Controller
 from Agent.zzz.dynamic_map import DynamicMap
+from Agent.zzz.JunctionTrajectoryPlanner import JunctionTrajectoryPlanner
 from Planning_library.trustset import TrustHybridset
 
 USE_CUDA = False#torch.cuda.is_available()

@@ -499,21 +499,21 @@ class CarEnv_02_Intersection_fixed:
             self.done = True
             reward = 0
             ego_status = 1
-            print("[CARLA]: Collision!")
+            # print("[CARLA]: Collision!")
         
         if self.ego_vehicle_pass():
             self.done = True
             reward = 1
             ego_status = 2
 
-            print("[CARLA]: Successful!")
+            # print("[CARLA]: Successful!")
 
         elif self.ego_vehicle_stuck():
             self.stuck_num += 1
             reward = 0
             ego_status = 3
             self.done = True
-            print("[CARLA]: Stuck!")
+            # print("[CARLA]: Stuck!")
 
         return state, reward, self.done, ego_status
 
@@ -522,7 +522,7 @@ class CarEnv_02_Intersection_fixed:
         spawn_vehicles = []
         transform = Transform()
         transform.location.x = 120 
-        transform.location.y = 191.8
+        transform.location.y = 191
         transform.location.z = 1
         transform.rotation.pitch = 0
         transform.rotation.yaw = 0
@@ -729,6 +729,8 @@ class CarEnv_02_Intersection_fixed:
             self.tm.ignore_signs_percentage(vehicle, 100)
             self.tm.ignore_lights_percentage(vehicle, 100)
             self.tm.ignore_walkers_percentage(vehicle, 0)
+            # if vehicle.attributes['role_name'] != "hero" :
+            #     vehicle.set_target_velocity(Vector3D(x=3))
             # self.tm.auto_lane_change(vehicle, True)
             
             # path = [carla.Location(x=151, y=186, z=0.038194),
