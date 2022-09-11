@@ -13,7 +13,8 @@ import carla
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
-from Test_Scenarios.TestScenario_Town02 import CarEnv_02_Intersection_fixed
+from Test_Scenarios.TestScenario_Town02_Fixed_State import \
+    CarEnv_02_Intersection_fixed_state
 from Test_Scenarios.TestScenario_Town03_Waymo_long_tail import \
     CarEnv_03_Waymo_Long_Tail
 from tqdm import tqdm
@@ -23,7 +24,7 @@ from results import Results
 
 TEST_EPISODES = 80000
 LOAD_STEP = 80000
-ROLLOUT_TIMES = 5
+ROLLOUT_TIMES = 50
 
 if __name__ == '__main__':
 
@@ -32,21 +33,21 @@ if __name__ == '__main__':
 
     # Create Agent
     agent = DCP_Agent(env)
-    agent.ensemble_transition_model.load(LOAD_STEP)
+    # agent.ensemble_transition_model.load(LOAD_STEP)
     
     # Result class
-    result = Results(agent.history_frame, create_new_train_file=False)
-    result.clear_old_test_data()
+    # result = Results(agent.history_frame, create_new_train_file=False)
+    # result.clear_old_test_data()
     
     # Loop over episodes
     for episode in tqdm(range(170, TEST_EPISODES + 1), unit='episodes'):
         
         print('Restarting episode')
-        # obs = env.reset()
+        obs = env.reset()
 
-        trained_state = result.sampled_trained_state(episode)
+        # trained_state = result.sampled_trained_state(episode)
         
-        obs = env.reset_with_state(trained_state)
+        # obs = env.reset_with_state(trained_state)
         if obs is None:
             continue
         done = False
@@ -61,22 +62,23 @@ if __name__ == '__main__':
             # DCP process            
             agent.history_obs_list.append(obs)
 
-            if len(agent.history_obs_list) >= agent.history_frame:
-                worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
-                dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
+            # if len(agent.history_obs_list) >= agent.history_frame:
+            #     worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
+            #     dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
                 
-                # fixed action:
-                dcp_action = np.array([8])
+            #     # fixed action:
+            #     dcp_action = np.array([8])
                 
-                estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
+            #     estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
 
-                print("worst_Q_list",worst_Q_list)
-                print("dcp_action",dcp_action)
-                state = np.array(agent.history_obs_list).flatten().tolist() # for record
-                agent.history_obs_list.pop(0)
+            #     print("worst_Q_list",worst_Q_list)
+            #     print("dcp_action",dcp_action)
+            #     state = np.array(agent.history_obs_list).flatten().tolist() # for record
+            #     agent.history_obs_list.pop(0)
 
-            else:
-                dcp_action = 0 # brake
+            # else:
+            #     dcp_action = 0 # brake
+            dcp_action = 5
         
             dcp_trajectory = agent.trajectory_planner.trajectory_update_CP(dcp_action)
             
@@ -86,7 +88,7 @@ if __name__ == '__main__':
                 action = [control_action.acc , control_action.steering]
                 
                 # reward calculation: assume that the ego vehicle will precisely follow trajectory
-                trajectory = candidate_trajectories_tuple[dcp_action[0]-1][0]
+                trajectory = candidate_trajectories_tuple[dcp_action-1][0]
                 Jp = trajectory.d_ddd[i]**2 
                 Js = trajectory.s_ddd[i]**2
                 ds = (30.0 / 3.6 - trajectory.s_d[i])**2 # target speed
@@ -104,15 +106,15 @@ if __name__ == '__main__':
             time.sleep(0.1)
             true_q_value.append(g_value)
             agent.clear_buff()
-            obs = env.reset_with_state(trained_state)
+            obs = env.reset()
             if obs is None:
                 break
 
             
         true_q_value = np.mean(true_q_value)
-        print("estimated_q_lower_bound", estimated_q_lower_bound)
+        # print("estimated_q_lower_bound", estimated_q_lower_bound)
         print("true_q_value", true_q_value)
-        result.estimated_q_lower_bound(state, dcp_action, estimated_q_lower_bound, true_q_value)
+        # result.estimated_q_lower_bound(state, dcp_action, estimated_q_lower_bound, true_q_value)
         
 
          
