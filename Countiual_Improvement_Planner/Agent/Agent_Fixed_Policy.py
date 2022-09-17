@@ -136,7 +136,7 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
     return False
     
 
-class OCRL_Agent():
+class CIPG_Agent():
     def __init__(self, env, training=False):
         self.env = env
         
@@ -155,7 +155,7 @@ class OCRL_Agent():
         self.agent_num = 4
         
         self.rollout_times = 1000
-        # self.rollout_length = 1
+        self.rollout_length = 10
         self.dt = 0.1
         self.gamma = 0.95
         self.q_batch_size = 32
@@ -196,6 +196,9 @@ class OCRL_Agent():
         self.move_gap = 2.5
         self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
+        
+        # reward
+        self.r_c = -10
       
     def act(self, obs):
         
@@ -208,8 +211,8 @@ class OCRL_Agent():
 
         worst_confidence_q_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
-            worst_confidence_q_list.append(self.update_worst_confidence_value(obs, ocrl_action, ego_trajectory))
-
+            worst_confidence_q_list.append(self.estimate_worst_confidence_value(obs, ocrl_action, ego_trajectory))
+        print("worst_confidence_q_list",worst_confidence_q_list)
      
         ocrl_action = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0]
 
@@ -312,28 +315,21 @@ class OCRL_Agent():
             self.collect_data.pop(0)
         return None
      
-    def update_worst_confidence_value(self, s_0, ocrl_action, ego_trajectory):
-        print("[OCRL] Start Update Worst Confidence Value!")        
+    def estimate_worst_confidence_value(self, s_0, ocrl_action, ego_trajectory):
+        print("[OCRL] Start Estimate Worst Confidence Value!",ocrl_action)        
         
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
         self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
-        low = np.zeros((self.agent_num, self.agent_dimension), dtype=np.float64)
-        high = np.ones((self.agent_num, self.agent_dimension), dtype=np.float64)
-        obs_shape = spaces.Box(low, high, dtype=np.float64).shape
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.0001)
         self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=1000000)
-        
+
+        # Update_Collision_Value
         for i in range(self.rollout_times):
             
             obs = np.array(s_0)
-            steps = 0
-            while True:
-                print("debug",s_0)
-                print("debug",ego_trajectory[0].x[steps])
-                print("debug",ego_trajectory[0].y[steps])
-                print("debug",ego_trajectory[0].yaw)
-                new_ego_obs = ego_trajectory[steps]
-
+            for steps in range(self.rollout_length+1):
+                new_ego_obs = self.get_ego_state_from_trajectory(ego_trajectory, steps)
+                
                 # use transition model to imagine surrounding agents
                 new_obs_list = self.ensemble_transition_model.rollout(obs, ocrl_action, new_ego_obs)
                 worst_confidence_q_list = []
@@ -348,13 +344,21 @@ class OCRL_Agent():
                 new_obs_idx = random.randint(0, len(new_obs_list)-1)
                 new_imgaine_obs = new_obs_list[new_obs_idx]        
                  
-                reward, collision = self.calculate_reward(obs, ocrl_action, candidate_trajectories_tuple)
+                collision = self.colli_check(obs)
                 if collision:
-                    # print("[Imagination]: Collision!")
+                    reward = self.r_c
                     done = True
-                 
-                self.imagine_replay_buffer.add(obs, ocrl_action, reward, new_obs_list, done)
+                    print("collision!",steps)
+                elif steps == self.rollout_length:
+                    reward = 0
+                    done = True
+                else:
+                    reward = 0
+                    done = False
                     
+                self.imagine_replay_buffer.add(obs, ocrl_action, reward, new_obs_list, done)
+                
+                epsilon = self.epsilon_by_frame(steps)    
                 if random.random() > epsilon:
                     obs = new_worst_imgaine_obs
                 else:
@@ -365,23 +369,26 @@ class OCRL_Agent():
                 if done:
                     self.update_Q_network_with_buffer()
                     self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
-
+                    
+                    obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
+                    q_env = self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
+                    print("q_env",q_env)
                     break
-                   
-        print("[Imagination]: Finish")
-        
-        for i in range(self.future_frame):
-          
-            # reward calculation: assume that the ego vehicle will precisely follow trajectory
-            Jp = trajectory.d_ddd[i]**2 
-            Js = trajectory.s_ddd[i]**2
-            ds = (30.0 / 3.6 - trajectory.s_d[i])**2 # target speed
-            cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * trajectory.d[i]**2
-            cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
-            q_ego -= 0.02 * cd + 0.02 * cv
+                           
+        q_ego = self.estimate_ego_value(ego_trajectory)
         
         obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
-        worst_q = q_ego + self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
+        q_env = self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
+        print("q_env",q_env)
+        worst_q = q_ego + q_env
+        return worst_q
+    
+    def get_ego_state_from_trajectory(self, ego_trajectory, steps):
+        ego_state = [ego_trajectory[0].x[steps], ego_trajectory[0].y[steps], 0, 0, 0]
+        # print("debug",ego_trajectory[0].x[-1])
+        # print("debug",ego_trajectory[0].y[-1])
+        # print("debug",ego_trajectory[0].yaw)
+        return ego_state
     
     def draw_debug(self, env, obs):
         vehicle_num = 0
@@ -399,17 +406,19 @@ class OCRL_Agent():
     def clear_buff(self):
         self.trajectory_planner.clear_buff(clean_csp=False)
         self.history_obs_list = []
-  
-    def calculate_reward(self, obs, ocrl_action, candidate_trajectories_tuple):
-        collision = self.colli_check(obs)
-        if collision:
-            r_c = -10
-        else:
-            r_c = 0
-        
-        reward = r_c 
-        
-        return reward, collision
+
+    def estimate_ego_value(self, ego_trajectory):
+        q_ego = 0
+        for i in range(self.rollout_length):
+            # reward calculation: assume that the ego vehicle will precisely follow trajectory
+            Jp = ego_trajectory[0].d_ddd[i]**2 
+            Js = ego_trajectory[0].s_ddd[i]**2
+            ds = (30.0 / 3.6 - ego_trajectory[0].s_d[i])**2 # target speed
+            cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * ego_trajectory[0].d[i]**2
+            cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
+            q_ego -= 0.02 * cd + 0.02 * cv
+            
+        return q_ego
   
     def colli_check(self, obs):
         ego_x = obs[0][0]
@@ -453,7 +462,43 @@ class OCRL_Agent():
         
         return False
         
-       
+    def update_Q_network_with_buffer(self):
+        
+        # can it accerlarate not using for? the buffer can directly sample n buffers
+        for i in range(self.q_batch_size):
+            obs, ocrl_action, reward, new_obs_list, done, indices, weights = self.imagine_replay_buffer.sample(1)
+            worst_confidence_q_list = []
+            for new_obs in new_obs_list:
+                new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
+                # worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs).max(0)[0].cpu().detach().numpy()
+                worst_confidence_q = self.target_Q_network.forward(new_obs).cpu().detach().numpy()[ocrl_action] # FIXME
+                worst_confidence_q_list.append(worst_confidence_q)
+            worst_next_q_value = np.min(worst_confidence_q_list)
+            
+            # print("worst_confidence_q_list",worst_confidence_q_list,worst_next_q_value)
+            # update worst_confidence_value
+
+            obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs[0])).to(self.device)
+            q_values         = self.worst_confidence_Q_network(obs)
+            q_value          = q_values.gather(0, torch.tensor(int(ocrl_action[0])).to(self.device))
+            next_q_value     = worst_next_q_value
+            expected_q_value = torch.tensor(reward[0] + self.gamma * next_q_value * (1 - done[0])).to(self.device)
+            loss  = (q_value - expected_q_value).pow(2)* torch.tensor(weights).to(self.device)
+            prios = loss + 1e-5
+            loss  = loss.mean()
+                
+            self.Q_optimizer.zero_grad()
+            loss.backward()
+            self.Q_optimizer.step()
+            self.imagine_replay_buffer.update_priorities(indices, prios.data.cpu().numpy())
+            # if done:
+            #     print("reward",reward)
+            # print("Q_loss",loss,q_value.cpu().detach().numpy(),expected_q_value.cpu().detach().numpy(),done)
+    
+    def update_target(self, current_model, target_model):
+        target_model.load_state_dict(current_model.state_dict())
+        
+          
 class OCRL_Transition_Model():
     def __init__(self, ensemble_num, history_frame, future_frame, agent_dimension, agent_num, obs_bias_x, obs_bias_y, 
                  obs_scale, throttle_scale, steer_scale, device, training, dt):
@@ -517,7 +562,7 @@ class OCRL_Transition_Model():
             predict_action = self.ensemble_models[ensemble_index].sample_prediction(torch_obs)
             predict_action = predict_action.cpu().detach().numpy()
                         
-            next_obs = [new_ego_obs[0]]
+            next_obs = [copy.deepcopy(new_ego_obs)]
             for j in range(1, vehicle_num):  # exclude ego vehicle
 
                 x = obs[j][0]
