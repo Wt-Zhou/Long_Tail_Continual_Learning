@@ -18,7 +18,7 @@ from Test_Scenarios.TestScenario_Town02_OCRL import \
     CarEnv_02_Intersection_fixed
 from tqdm import tqdm
 
-from Agent.Agent import OCRL_Agent
+from Agent.Agent_Fixed_Policy import OCRL_Agent
 
 TRAIN_EPISODES = 250
 LOAD_STEP = 0
