@@ -40,8 +40,13 @@ class Ensemble_PrioritizedBuffer(object):
         
         total    = len(self.buffer)
         weights  = (total * probs[indices]) ** (-beta)
+        # print("weights",weights)
         weights /= weights.max()
+        # print("weights",weights)
+
         weights  = np.array(weights, dtype=np.float32)
+        # print("weights",weights)
+
         batch       = list(zip(*samples))
 
         states      = np.concatenate(batch[0])

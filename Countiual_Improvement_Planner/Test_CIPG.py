@@ -30,7 +30,7 @@ if __name__ == '__main__':
 
     # Create Agent
     agent = CIPG_Agent(env)
-    agent.learning_by_driving(load_step=LOAD_STEP, train_episode=TRAIN_EPISODES)
+    agent.learning_by_driving_in_a_case(load_step=LOAD_STEP, train_episode=TRAIN_EPISODES)
             
             
             

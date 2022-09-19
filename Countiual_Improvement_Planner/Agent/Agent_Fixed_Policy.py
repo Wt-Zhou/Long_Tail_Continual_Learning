@@ -14,6 +14,9 @@ import matplotlib.pyplot as plt
 import numba
 import numpy as np
 import torch
+
+torch.set_default_tensor_type(torch.DoubleTensor)
+
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
@@ -139,6 +142,7 @@ def _colli_check_acc(ego_x_list, ego_y_list, ego_yaw_list, rollout_trajectory, f
 class CIPG_Agent():
     def __init__(self, env, training=False):
         self.env = env
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # transition model parameter        
         self.ensemble_num = 10
@@ -146,36 +150,14 @@ class CIPG_Agent():
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
-        self.obs_scale = 1
+        self.obs_scale = 0.5
         self.obs_bias_x = 133
         self.obs_bias_y = 189
-        self.throttle_scale = 2
+        self.throttle_scale = 1
         self.steer_scale = 1
         self.agent_dimension = 5  # x,y,vx,vy,yaw
         self.agent_num = 4
-        
-        self.rollout_times = 10000
-        self.rollout_length = 50
-        self.dt = 0.1
-        self.gamma = 0.95
-        self.q_batch_size = 64
-        
-        self.test_times = 1
-        
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        torch.set_default_tensor_type(torch.DoubleTensor)
-        
-        self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
-                                                              self.future_frame, self.agent_dimension, self.agent_num,
-                                                              self.obs_bias_x, self.obs_bias_y, self.obs_scale, 
-                                                              self.throttle_scale, self.steer_scale, 
-                                                              self.device, training, self.dt)
-        
-        # self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        # self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
-
         self.collect_data = []
-        
         self.trained_replay_buffer = Replay_Buffer(obs_shape=env.observation_space.shape,
                                             action_shape=env.action_space.shape, # discrete, 1 dimension!
                                             capacity= 1000000,
@@ -185,7 +167,21 @@ class CIPG_Agent():
         self.history_obs_list = []
         self.rollout_trajectory_tuple = []
         
-        # basic component
+        # imagination parameter        
+        self.rollout_times = 5000
+        self.rollout_length = 50
+        self.dt = 0.1
+        self.test_times = 1
+        
+        self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
+                                                              self.future_frame, self.agent_dimension, self.agent_num,
+                                                              self.obs_bias_x, self.obs_bias_y, self.obs_scale, 
+                                                              self.throttle_scale, self.steer_scale, 
+                                                              self.device, training, self.dt)
+        self.gamma = 0.99
+        self.q_batch_size = 30
+        
+        # basic planning component
         self.trajectory_planner = JunctionTrajectoryPlanner()
         assert self.future_frame * self.trajectory_planner.dt <= self.trajectory_planner.mint,"The trajectory is shorter than the agents' horizon!"
         assert self.dt == self.trajectory_planner.dt,"Trajectory planner dt is not equal to DCP agent!"
@@ -200,7 +196,8 @@ class CIPG_Agent():
         self.check_radius = self.robot_radius
         
         # reward
-        self.r_c = -10
+        self.r_c = -1
+        self.ego_reward_scale = 0.002
       
     def act(self, obs):
         
@@ -213,7 +210,10 @@ class CIPG_Agent():
 
         worst_confidence_q_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
-            worst_confidence_q_list.append(self.estimate_worst_confidence_value(obs, ocrl_action, ego_trajectory))
+            if ocrl_action == 0:
+                worst_confidence_q_list.append(-5)
+            else:
+                worst_confidence_q_list.append(self.estimate_worst_confidence_value(obs, ocrl_action, ego_trajectory))
         print("worst_confidence_q_list",worst_confidence_q_list)
      
         ocrl_action = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0]
@@ -222,7 +222,7 @@ class CIPG_Agent():
 
         return ocrl_action, ocrl_trajectory, candidate_trajectories_tuple
     
-    def learning_by_driving(self, load_step, train_episode):
+    def learning_by_driving_in_a_case(self, load_step, train_episode):
         # Create environment 
         env = self.env
 
@@ -232,54 +232,52 @@ class CIPG_Agent():
         # Loop over episodes
         for episode in tqdm(range(1, train_episode + 1), unit='episodes'):
             
+            # Update Transition Model
+            self.update_ensemble_transition_model()
+            
             print('Restarting episode')
             obs = env.reset()
             obs = np.array(obs)
             ocrl_action, ocrl_trajectory = self.act(obs)
-            
-            # Update Transition Model
-            self.update_ensemble_transition_model()
 
-            # Loop over steps
-            step = 0
-            while True: 
+            for i in range(self.test_times):
                 # Reset environment and get initial state
                 obs = env.reset()
-                done = False        
-                for i in range(self.test_times):
-                    g_value = 0
-                    for i in range(self.future_frame):
-                        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
-                        action = [control_action.acc , control_action.steering]
-                        
-                        # reward calculation: assume that the ego vehicle will precisely follow trajectory
-                        
-                        g_value = self.estimate_ego_value(ocrl_trajectory.trajectory)
-                        new_obs, reward, done, collision = env.step(action)   
-                        self.collect_data.append([obs, action, reward, new_obs, done])
-
-                        self.dynamic_map.update_map_from_list_obs(new_obs)
-                        if done:
-                            if collision == True:
-                                g_value -= 10
-                            break
-                            
-                    time.sleep(0.1)
-                    true_q_value.append(g_value)
+                done = False  
+                g_value = 0
+                for i in range(self.future_frame):
+                    control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+                    action = [control_action.acc , control_action.steering]
                     
-                    self.clear_buff()
-                    obs = env.reset()
-                    if obs is None:
-                        break
-                
-                if ocrl_action == 0:
-                    true_q_value = -1
-                else:
-                    true_q_value = np.mean(true_q_value)
+                    # reward calculation: assume that the ego vehicle will precisely follow trajectory
+                    
+                    g_value = self.estimate_ego_value(ocrl_trajectory.trajectory)
+                    new_obs, reward, done, collision = env.step(action)   
+                    self.collect_data.append([obs, action, reward, new_obs, done])
 
-                print("True_Performance", true_q_value)
-                print("Worst_Confidence_Value", worst_confidence_value)
-                      
+                    self.dynamic_map.update_map_from_list_obs(new_obs)
+                    
+                    if done:
+                        if collision == True:
+                            g_value -= 10
+                        
+                        time.sleep(0.1)
+                        true_q_value.append(g_value)
+                        self.clear_buff()
+                        break
+
+            
+            if ocrl_action == 0:
+                true_q_value = -1
+            else:
+                true_q_value = np.mean(true_q_value)
+
+            print("True_Performance", true_q_value)
+            print("Worst_Confidence_Value", worst_confidence_value)
+                    
+        return None
+
+    def test_performance_in_case(self, obs):
         return None
 
     def epsilon_by_frame(self, frame_idx):
@@ -306,10 +304,12 @@ class CIPG_Agent():
     def estimate_worst_confidence_value(self, s_0, ocrl_action, ego_trajectory):
         print("[OCRL] Start Estimate Worst Confidence Value!",ocrl_action)        
         
-        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.0001)
-        self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=1000000)
+        # self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
+        # self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
+        self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, 1).to(self.device)
+        self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, 1).to(self.device)
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.005)
+        self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=100000)
 
         # Update_Collision_Value
         for i in range(self.rollout_times):
@@ -321,7 +321,7 @@ class CIPG_Agent():
                 if collision:
                     reward = self.r_c
                     done = True
-                    # print("collision!",steps)
+                    print("collision!",steps)
                 elif steps == self.rollout_length:
                     reward = 0
                     done = True
@@ -330,19 +330,20 @@ class CIPG_Agent():
                     done = False
                 
                 new_ego_obs = self.get_ego_state_from_trajectory(ego_trajectory, steps)
-                # print("debug new_ego_obs",new_ego_obs, steps)
-                # use transition model to imagine surrounding agents
                 new_obs_list = self.ensemble_transition_model.rollout(obs, ocrl_action, new_ego_obs)          
-                # print("debug new_obs_list",new_obs_list[0], steps)
-  
+                # print("obs",obs)
+                # print("ocrl_action",ocrl_action)
+                # print("new_ego_obs",new_ego_obs)
+                # print("new_obs_list",new_obs_list)
                 self.imagine_replay_buffer.add(obs, ocrl_action, reward, new_obs_list, done)
                 
                 worst_confidence_q_list = []
                 for new_obs in new_obs_list:
                     new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
-                    worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy()
+                    # worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy()
+                    worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[0].cpu().detach().numpy()
                     worst_confidence_q_list.append(worst_confidence_q)     
-                
+                # print("worst_confidence_q_list",worst_confidence_q_list)
                 new_worst_case_obs_idx = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0][0]
                 new_worst_imgaine_obs = new_obs_list[new_worst_case_obs_idx]
                 
@@ -355,23 +356,27 @@ class CIPG_Agent():
                     obs = new_worst_imgaine_obs
                 else:
                     obs = new_imgaine_obs   
-    
+                # print("obs",obs,steps)
+
                 steps += 1
 
                 if done:
                     self.update_Q_network_with_buffer()
-                    if i % 10 == 0:
-                        self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
                     if i % 50 == 0:
+                        self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
+                    if i % 10 == 0:
                         init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
-                        q_env = self.worst_confidence_Q_network.forward(init_obs)[ocrl_action].cpu().detach().numpy()
-                        print("q_env",q_env)
+                        # q_env = self.worst_confidence_Q_network.forward(init_obs)[ocrl_action].cpu().detach().numpy()
+                        q_env = self.worst_confidence_Q_network.forward(init_obs)[0].cpu().detach().numpy()
+                        print("---------------q_env",q_env)
                     break
                            
         q_ego = self.estimate_ego_value(ego_trajectory)
         
         obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
-        q_env = self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
+        # q_env = self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
+        q_env = self.worst_confidence_Q_network.forward(obs)[0].cpu().detach().numpy()
+        print("q_ego",q_ego)
         print("q_env",q_env)
         worst_q = q_ego + q_env
         return worst_q
@@ -409,7 +414,7 @@ class CIPG_Agent():
             ds = (30.0 / 3.6 - ego_trajectory[0].s_d[i])**2 # target speed
             cd = 0.1 * Jp + 0.1 * 0.1 + 0.05 * ego_trajectory[0].d[i]**2
             cv = 0.1 * Js + 0.1 * 0.1 + 0.05 * ds
-            q_ego -= 0.02 * cd + 0.02 * cv
+            q_ego -= (1 * cd + 1 * cv) * self.ego_reward_scale
             
         return q_ego
   
@@ -463,20 +468,33 @@ class CIPG_Agent():
             worst_confidence_q_list = []
             for new_obs in new_obs_list:
                 new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
-                worst_confidence_q = self.target_Q_network.forward(new_obs).cpu().detach().numpy()[ocrl_action] # FIXME
+                # worst_confidence_q = self.target_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy() # FIXME
+                worst_confidence_q = self.target_Q_network.forward(new_obs)[0].cpu().detach().numpy() # FIXME
                 worst_confidence_q_list.append(worst_confidence_q)
             worst_next_q_value = np.min(worst_confidence_q_list)
             
             obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs[0])).to(self.device)
             q_values         = self.worst_confidence_Q_network(obs)
-            q_value          = q_values.gather(0, torch.tensor(int(ocrl_action[0])).to(self.device))
+            # q_value          = q_values.gather(0, torch.tensor(int(ocrl_action[0])).to(self.device))
+            q_value          = q_values.gather(0, torch.tensor(int(0)).to(self.device))
             next_q_value     = worst_next_q_value
             
             expected_q_value = torch.tensor(reward[0] + self.gamma * next_q_value * (1 - done[0])).to(self.device)
             loss  = (q_value - expected_q_value).pow(2)* torch.tensor(weights).to(self.device)
             prios = loss + 1e-5
             loss  = loss.mean()
-                
+            # print("new_obs_list",new_obs_list)
+            # print("worst_confidence_q_list",worst_confidence_q_list)
+            # print("worst_next_q_value",worst_next_q_value)
+            # print("q_value",q_value)
+            # if done[0]:
+                # print("obs",obs)
+            # print("q_value",q_value)
+            # print("expected_q_value",expected_q_value, done)
+            # print("reward",reward)
+                # print("weights",weights)
+                # print("loss",loss)
+            # print("prios",prios)
             self.Q_optimizer.zero_grad()
             loss.backward()
             self.Q_optimizer.step()
@@ -540,13 +558,13 @@ class OCRL_Transition_Model():
             if obs[i][0] != -999: # use -999 as signal, very unstable
                 vehicle_num += 1
 
-        
         torch_obs = torch.tensor(self.normalize_state(obs)).to(self.device)   
 
         next_obs_list = []
 
         for ensemble_index in range(self.ensemble_num):
-            predict_action = self.ensemble_models[ensemble_index].sample_prediction(torch_obs)
+            # predict_action = self.ensemble_models[ensemble_index].sample_prediction(torch_obs)
+            predict_action, sigma = self.ensemble_models[ensemble_index].forward(torch_obs)
             predict_action = predict_action.cpu().detach().numpy()
                         
             next_obs = [copy.deepcopy(new_ego_obs)]
@@ -556,10 +574,13 @@ class OCRL_Transition_Model():
                 y = obs[j][1]
                 velocity = math.sqrt(obs[j][2]**2 + obs[j][3]**2)
                 yaw = obs[j][4]
-                throttle = predict_action[j*2*self.future_frame] * self.throttle_scale
+                throttle = predict_action[j*2*self.future_frame] * self.throttle_scale #FIXME
                 delta = predict_action[j*2*self.future_frame+1] * self.steer_scale
-
+                # print("x,y,v",x,y,velocity)
+                # print("throttle",throttle)
+                # print("delta",delta)
                 x, y, yaw, velocity, _, _ = self.kbm.kinematic_model(x, y, yaw, velocity, throttle, delta)
+                # print("x,y,v2",x,y,velocity)
                 next_obs.append([x,y,velocity*math.cos(yaw),velocity*math.sin(yaw),yaw])
 
             for i in range(0,self.agent_num-vehicle_num):
@@ -645,7 +666,7 @@ class OCRL_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.3, b=0.3)
+            nn.init.uniform_(m.weight, a=-0.2, b=0.2)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式
@@ -678,47 +699,18 @@ class OCRL_Transition_Model():
                 'DCP_models/ensemble_models_%s_%s.pt' % (train_step, i)
             )
 
-
-class Rtree_Q_Store(nn.Module):
-    def __init__(self, num_inputs, num_actions):
-        super(Rtree_Q_Store, self).__init__()
-        
-        
-    def update_all_values(self):
-        return None
-    
-    def add(self, obs, action, next_obs_list, reward, done):
-        return None
-        
-    def forward(self, obs, action):
-        
-        q_ego = 0        # Related To Trajectory
-        q_collision = 0  # Related To Collision
-        
-        q_value = q_ego + q_collision
-        
-        return q_value
-    
-    def act(self, state, epsilon):
-        if random.random() > epsilon:
-            # state   = Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
-            q_value = self.forward(state)
-            action  = q_value.max(0)[1].data.cpu().detach().numpy()
-        else:
-            action = random.randrange(self.num_actions)
-        return action
-
-
 class Q_network(nn.Module):
     def __init__(self, num_inputs, num_actions):
         super(Q_network, self).__init__()
         
         self.layers = nn.Sequential(
-            nn.Linear(num_inputs, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_actions)
+            nn.Linear(num_inputs, 64),
+            nn.ReLU6(),
+            nn.Linear(64, 64),
+            nn.ReLU6(),
+            nn.Linear(64, 64),
+            nn.ReLU6(),
+            nn.Linear(64, num_actions)
         )
         self.num_actions = num_actions
         
