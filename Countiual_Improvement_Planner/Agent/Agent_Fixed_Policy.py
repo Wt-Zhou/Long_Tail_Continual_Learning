@@ -168,10 +168,10 @@ class CIPG_Agent():
         self.rollout_trajectory_tuple = []
         
         # imagination parameter        
-        self.rollout_times = 5000
-        self.rollout_length = 50
-        self.dt = 0.1
-        self.test_times = 1
+        self.rollout_times = 500
+        self.rollout_length = 5
+        self.dt = 1
+        self.test_times = 10
         
         self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
@@ -179,12 +179,12 @@ class CIPG_Agent():
                                                               self.throttle_scale, self.steer_scale, 
                                                               self.device, training, self.dt)
         self.gamma = 0.99
-        self.q_batch_size = 30
+        self.q_batch_size = 5
         
         # basic planning component
         self.trajectory_planner = JunctionTrajectoryPlanner()
         assert self.future_frame * self.trajectory_planner.dt <= self.trajectory_planner.mint,"The trajectory is shorter than the agents' horizon!"
-        assert self.dt == self.trajectory_planner.dt,"Trajectory planner dt is not equal to DCP agent!"
+        # assert self.dt == self.trajectory_planner.dt,"Trajectory planner dt is not equal to DCP agent!"
         self.controller = Controller()
         self.dynamic_map = DynamicMap()
         self.dynamic_map.update_ref_path(self.env)
@@ -197,7 +197,7 @@ class CIPG_Agent():
         
         # reward
         self.r_c = -1
-        self.ego_reward_scale = 0.002
+        self.ego_reward_scale = 0.01
       
     def act(self, obs):
         
@@ -211,7 +211,7 @@ class CIPG_Agent():
         worst_confidence_q_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
             if ocrl_action == 0:
-                worst_confidence_q_list.append(-5)
+                worst_confidence_q_list.append(-0.1)
             else:
                 worst_confidence_q_list.append(self.estimate_worst_confidence_value(obs, ocrl_action, ego_trajectory))
         print("worst_confidence_q_list",worst_confidence_q_list)
@@ -238,46 +238,46 @@ class CIPG_Agent():
             print('Restarting episode')
             obs = env.reset()
             obs = np.array(obs)
-            ocrl_action, ocrl_trajectory = self.act(obs)
+            ocrl_action, ocrl_trajectory, candidate_trajectories_tuple = self.act(obs)
+            self.test_performance_in_case(obs, candidate_trajectories_tuple)
 
-            for i in range(self.test_times):
-                # Reset environment and get initial state
-                obs = env.reset()
-                done = False  
-                g_value = 0
-                for i in range(self.future_frame):
-                    control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
-                    action = [control_action.acc , control_action.steering]
-                    
-                    # reward calculation: assume that the ego vehicle will precisely follow trajectory
-                    
-                    g_value = self.estimate_ego_value(ocrl_trajectory.trajectory)
-                    new_obs, reward, done, collision = env.step(action)   
-                    self.collect_data.append([obs, action, reward, new_obs, done])
-
-                    self.dynamic_map.update_map_from_list_obs(new_obs)
-                    
-                    if done:
-                        if collision == True:
-                            g_value -= 10
-                        
-                        time.sleep(0.1)
-                        true_q_value.append(g_value)
-                        self.clear_buff()
-                        break
-
-            
-            if ocrl_action == 0:
-                true_q_value = -1
-            else:
-                true_q_value = np.mean(true_q_value)
-
-            print("True_Performance", true_q_value)
-            print("Worst_Confidence_Value", worst_confidence_value)
                     
         return None
 
-    def test_performance_in_case(self, obs):
+    def test_performance_in_case(self, obs, candidate_trajectories_tuple):
+        true_performance_list = []
+        for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
+            true_q_value = []
+            for i in range(self.test_times): 
+                  
+                g_value = self.estimate_ego_value(ego_trajectory)
+
+                obs = self.env.reset()
+                obs = np.array(obs)
+                ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
+                for j in range(int(self.dt/self.env.dt * self.rollout_length)):
+                    print("j",j)
+                    control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+                    action = [control_action.acc , control_action.steering]                    
+                    
+                    new_obs, reward, done, collision = self.env.step(action)   
+                    self.dynamic_map.update_map_from_list_obs(new_obs)
+                    
+                    if done or j == self.dt/self.env.dt * self.rollout_length-1:
+                        if collision == True:
+                            g_value += self.r_c
+                        print("done")
+                        true_q_value.append(g_value)
+                        self.clear_buff()
+                        obs = self.env.reset()
+                        break
+            print("true_q_value",true_q_value)
+            true_q_value = np.mean(true_q_value)
+            true_performance_list.append(true_q_value)
+            
+        print("True_Performance", true_performance_list)
+                
+        
         return None
 
     def epsilon_by_frame(self, frame_idx):
@@ -310,14 +310,21 @@ class CIPG_Agent():
         self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, 1).to(self.device)
         self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.005)
         self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=100000)
+        time00 = time.time()
 
         # Update_Collision_Value
         for i in range(self.rollout_times):
+            time0 = time.time()
+
+            # print("rollout_time",time0 - time00)
+            time00 = time0
             
             obs = np.array(s_0)
             for steps in range(self.rollout_length+1):
-                               
+                time1 = time.time()
+   
                 collision = self.colli_check(obs)
+
                 if collision:
                     reward = self.r_c
                     done = True
@@ -328,21 +335,23 @@ class CIPG_Agent():
                 else:
                     reward = 0
                     done = False
-                
+                time2 = time.time()
+
                 new_ego_obs = self.get_ego_state_from_trajectory(ego_trajectory, steps)
-                new_obs_list = self.ensemble_transition_model.rollout(obs, ocrl_action, new_ego_obs)          
-                # print("obs",obs)
-                # print("ocrl_action",ocrl_action)
-                # print("new_ego_obs",new_ego_obs)
-                # print("new_obs_list",new_obs_list)
+                new_obs_list = self.ensemble_transition_model.rollout(obs, ocrl_action, new_ego_obs)     
+                time22 = time.time()
+     
                 self.imagine_replay_buffer.add(obs, ocrl_action, reward, new_obs_list, done)
-                
+
                 worst_confidence_q_list = []
                 for new_obs in new_obs_list:
                     new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
                     # worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy()
                     worst_confidence_q = self.worst_confidence_Q_network.forward(new_obs)[0].cpu().detach().numpy()
-                    worst_confidence_q_list.append(worst_confidence_q)     
+                    worst_confidence_q_list.append(worst_confidence_q)   
+                
+                time3 = time.time()
+                      
                 # print("worst_confidence_q_list",worst_confidence_q_list)
                 new_worst_case_obs_idx = np.where(worst_confidence_q_list==np.min(worst_confidence_q_list))[0][0]
                 new_worst_imgaine_obs = new_obs_list[new_worst_case_obs_idx]
@@ -357,7 +366,6 @@ class CIPG_Agent():
                 else:
                     obs = new_imgaine_obs   
                 # print("obs",obs,steps)
-
                 steps += 1
 
                 if done:
@@ -366,22 +374,28 @@ class CIPG_Agent():
                         self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
                     if i % 10 == 0:
                         init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
-                        # q_env = self.worst_confidence_Q_network.forward(init_obs)[ocrl_action].cpu().detach().numpy()
                         q_env = self.worst_confidence_Q_network.forward(init_obs)[0].cpu().detach().numpy()
                         print("---------------q_env",q_env)
+                    time4 = time.time()
+                    # print("time",time4-time3,time3-time22, time22-time2, time2-time1)
+
                     break
-                           
+                
+
+          
         q_ego = self.estimate_ego_value(ego_trajectory)
         
         obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
-        # q_env = self.worst_confidence_Q_network.forward(obs)[ocrl_action].cpu().detach().numpy()
         q_env = self.worst_confidence_Q_network.forward(obs)[0].cpu().detach().numpy()
+        if q_env > 0:
+            q_env = 0
         print("q_ego",q_ego)
         print("q_env",q_env)
         worst_q = q_ego + q_env
         return worst_q
     
     def get_ego_state_from_trajectory(self, ego_trajectory, steps):
+        steps = int(steps * (self.dt/self.trajectory_planner.dt))
         ego_state = [ego_trajectory[0].x[steps], ego_trajectory[0].y[steps], 0, 0, 0]
         # print("debug",ego_trajectory[0].x[-1])
         # print("debug",ego_trajectory[0].y[-1])
@@ -419,16 +433,16 @@ class CIPG_Agent():
         return q_ego
   
     def colli_check(self, obs):
+        
         ego_x = obs[0][0]
         ego_y = obs[0][1]
         ego_yaw = obs[0][4]
-
 
         for i in range(1,self.agent_num):
             obst_x = obs[i][0]
             obst_y = obs[i][1]
             obst_yaw = obs[i][4]
-            
+
             if self.colli_between_vehicle(ego_x, ego_y, ego_yaw, obst_x, obst_y, obst_yaw):
                 return True
                 
@@ -461,7 +475,7 @@ class CIPG_Agent():
         return False
         
     def update_Q_network_with_buffer(self):
-        
+        time1 = time.time()
         # can it accerlarate not using for? the buffer can directly sample n buffers
         for i in range(self.q_batch_size):
             obs, ocrl_action, reward, new_obs_list, done, indices, weights = self.imagine_replay_buffer.sample(1)
@@ -483,23 +497,42 @@ class CIPG_Agent():
             loss  = (q_value - expected_q_value).pow(2)* torch.tensor(weights).to(self.device)
             prios = loss + 1e-5
             loss  = loss.mean()
-            # print("new_obs_list",new_obs_list)
-            # print("worst_confidence_q_list",worst_confidence_q_list)
-            # print("worst_next_q_value",worst_next_q_value)
-            # print("q_value",q_value)
-            # if done[0]:
-                # print("obs",obs)
-            # print("q_value",q_value)
-            # print("expected_q_value",expected_q_value, done)
-            # print("reward",reward)
-                # print("weights",weights)
-                # print("loss",loss)
-            # print("prios",prios)
+
             self.Q_optimizer.zero_grad()
             loss.backward()
             self.Q_optimizer.step()
             self.imagine_replay_buffer.update_priorities(indices, prios.data.cpu().numpy())
-                
+        time2 = time.time()
+
+            
+    def update_Q_network_with_buffer_acc(self):
+        time1 = time.time()
+        obs, ocrl_action, reward, new_obs_list, done, indices, weights = self.imagine_replay_buffer.sample(self.q_batch_size)
+        worst_confidence_q_list = []
+        # for new_obs in new_obs_list:
+        #     new_obs = torch.tensor(self.ensemble_transition_model.normalize_state(new_obs)).to(self.device)
+        #     # worst_confidence_q = self.target_Q_network.forward(new_obs)[ocrl_action].cpu().detach().numpy() # FIXME
+        #     worst_confidence_q = self.target_Q_network.forward(new_obs)[0].cpu().detach().numpy() # FIXME
+        #     worst_confidence_q_list.append(worst_confidence_q)
+        # worst_next_q_value = np.min(worst_confidence_q_list)
+        
+        obs = [torch.tensor(self.ensemble_transition_model.normalize_state(one_obs)).to(self.device) for one_obs in obs]
+        q_values         = self.worst_confidence_Q_network(obs)
+        q_value          = q_values.gather(0, torch.tensor(int(0)).to(self.device))
+        next_q_value     = self.target_Q_network(np.array(new_obs_list).flatten())
+        
+        expected_q_value = torch.tensor(reward[0] + self.gamma * next_q_value * (1 - done[0])).to(self.device)
+        loss  = (q_value - expected_q_value).pow(2)* torch.tensor(weights).to(self.device)
+        prios = loss + 1e-5
+        loss  = loss.mean()
+
+        self.Q_optimizer.zero_grad()
+        loss.backward()
+        self.Q_optimizer.step()
+        self.imagine_replay_buffer.update_priorities(indices, prios.data.cpu().numpy())
+        time2 = time.time()
+        print("q-time",time2-time1)      
+             
     def update_target(self, current_model, target_model):
         target_model.load_state_dict(current_model.state_dict())
         
@@ -590,7 +623,6 @@ class OCRL_Transition_Model():
         return next_obs_list
   
     def normalize_state(self, obs):
-        normalize_state = []
         normalize_obs = copy.deepcopy(obs)
         obs_length = self.agent_num
         for i in range(self.agent_num):
@@ -600,8 +632,36 @@ class OCRL_Transition_Model():
             else:
                 normalize_obs[i][0] = obs[i][0] - self.obs_bias_x
                 normalize_obs[i][1] = obs[i][1] - self.obs_bias_y
+             
+        return (np.array(normalize_obs).flatten()/self.obs_scale)# flatten to list
+    
+    def normalize_state_list(self, obs_list):
+        for i in range(len(obs_list)):
+            normalize_obs = copy.deepcopy(obs_list[i])
+            obs_length = self.agent_num
+            for j in range(self.agent_num):
+                if obs_list[i][j][0] == -999:
+                    normalize_obs[j][0] = 20
+                    normalize_obs[j][1] = 0
+                else:
+                    normalize_obs[j][0] = obs_list[i][j][0] - self.obs_bias_x
+                    normalize_obs[j][1] = obs_list[i][j][1] - self.obs_bias_y
+                
+            obs_list[i] = (np.array(normalize_obs).flatten()/self.obs_scale)
             
-        return (np.array(normalize_obs).flatten()/self.obs_scale) # flatten to list
+    def normalize_multiple_state_list(self, obs_list):
+        for i in range(len(obs_list)):
+            normalize_obs = copy.deepcopy(obs_list[i])
+            obs_length = self.agent_num
+            for j in range(self.agent_num):
+                if obs_list[i][j][0] == -999:
+                    normalize_obs[j][0] = 20
+                    normalize_obs[j][1] = 0
+                else:
+                    normalize_obs[j][0] = obs_list[i][j][0] - self.obs_bias_x
+                    normalize_obs[j][1] = obs_list[i][j][1] - self.obs_bias_y
+                
+            obs_list[i] = (np.array(normalize_obs).flatten()/self.obs_scale)
     
     def update_model(self, obs, new_obs):
        
@@ -666,7 +726,7 @@ class OCRL_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.2, b=0.2)
+            nn.init.uniform_(m.weight, a=-0.0, b=0.0)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式

@@ -225,7 +225,7 @@ class CarEnv_02_Intersection_fixed:
     def ego_vehicle_collision(self, event):
         self.ego_vehicle_collision_sign = True
         self.ego_vehicle_collision_actor = event.other_actor
-        print("collision_id", self.ego_vehicle_collision_actor)
+        # print("collision_id", self.ego_vehicle_collision_actor)
 
     def wrap_state(self):
         # state = [0 for i in range((OBSTACLES_CONSIDERED + 1) * 4)]
