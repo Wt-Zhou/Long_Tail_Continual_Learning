@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from Agent.Agent_Fixed_Policy import CIPG_Agent
 
-TRAIN_EPISODES = 250
+TRAIN_EPISODES = 50
 LOAD_STEP = 0
 
 if __name__ == '__main__':

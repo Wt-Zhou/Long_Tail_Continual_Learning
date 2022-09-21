@@ -145,8 +145,7 @@ class CIPG_Agent():
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # transition model parameter        
-        self.ensemble_num = 10
-        self.used_ensemble_num = 1
+        self.ensemble_num = 3
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
@@ -171,7 +170,7 @@ class CIPG_Agent():
         self.rollout_times = 500
         self.rollout_length = 5
         self.dt = 1
-        self.test_times = 10
+        self.test_times = 50
         
         self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
@@ -179,7 +178,7 @@ class CIPG_Agent():
                                                               self.throttle_scale, self.steer_scale, 
                                                               self.device, training, self.dt)
         self.gamma = 0.99
-        self.q_batch_size = 5
+        self.q_batch_size = 10
         
         # basic planning component
         self.trajectory_planner = JunctionTrajectoryPlanner()
@@ -190,7 +189,7 @@ class CIPG_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        self.robot_radius = 2.0 # 
+        self.robot_radius = 3.0 # 
         self.move_gap = 2.5
         self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
@@ -212,7 +211,7 @@ class CIPG_Agent():
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
             if ocrl_action == 0:
                 worst_confidence_q_list.append(-0.1)
-            else:
+            elif ocrl_action == 1:
                 worst_confidence_q_list.append(self.estimate_worst_confidence_value(obs, ocrl_action, ego_trajectory))
         print("worst_confidence_q_list",worst_confidence_q_list)
      
@@ -256,22 +255,20 @@ class CIPG_Agent():
                 obs = np.array(obs)
                 ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
                 for j in range(int(self.dt/self.env.dt * self.rollout_length)):
-                    print("j",j)
                     control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
                     action = [control_action.acc , control_action.steering]                    
                     
                     new_obs, reward, done, collision = self.env.step(action)   
+                    self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
                     self.dynamic_map.update_map_from_list_obs(new_obs)
                     
                     if done or j == self.dt/self.env.dt * self.rollout_length-1:
                         if collision == True:
                             g_value += self.r_c
-                        print("done")
                         true_q_value.append(g_value)
                         self.clear_buff()
                         obs = self.env.reset()
                         break
-            print("true_q_value",true_q_value)
             true_q_value = np.mean(true_q_value)
             true_performance_list.append(true_q_value)
             
@@ -308,7 +305,7 @@ class CIPG_Agent():
         # self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, self.discrete_action_num).to(self.device)
         self.worst_confidence_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, 1).to(self.device)
         self.target_Q_network = Q_network(self.history_frame * self.agent_dimension * self.agent_num, 1).to(self.device)
-        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.005)
+        self.Q_optimizer = optim.Adam(self.worst_confidence_Q_network.parameters(), lr=0.001)
         self.imagine_replay_buffer = Ensemble_PrioritizedBuffer(capacity=100000)
         time00 = time.time()
 
@@ -328,7 +325,7 @@ class CIPG_Agent():
                 if collision:
                     reward = self.r_c
                     done = True
-                    print("collision!",steps)
+                    # print("collision!",steps)
                 elif steps == self.rollout_length:
                     reward = 0
                     done = True
@@ -372,10 +369,10 @@ class CIPG_Agent():
                     self.update_Q_network_with_buffer()
                     if i % 50 == 0:
                         self.update_target(self.worst_confidence_Q_network, self.target_Q_network)
-                    if i % 10 == 0:
-                        init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
-                        q_env = self.worst_confidence_Q_network.forward(init_obs)[0].cpu().detach().numpy()
-                        print("---------------q_env",q_env)
+                    # if i % 100 == 0:
+                    #     init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
+                    #     q_env = self.worst_confidence_Q_network.forward(init_obs)[0].cpu().detach().numpy()
+                    #     print("---------------q_env",q_env)
                     time4 = time.time()
                     # print("time",time4-time3,time3-time22, time22-time2, time2-time1)
 
@@ -385,8 +382,8 @@ class CIPG_Agent():
           
         q_ego = self.estimate_ego_value(ego_trajectory)
         
-        obs = torch.tensor(self.ensemble_transition_model.normalize_state(obs)).to(self.device)
-        q_env = self.worst_confidence_Q_network.forward(obs)[0].cpu().detach().numpy()
+        init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
+        q_env = self.worst_confidence_Q_network.forward(init_obs)[0].cpu().detach().numpy()
         if q_env > 0:
             q_env = 0
         print("q_ego",q_ego)
@@ -726,7 +723,7 @@ class OCRL_Transition_Model():
  
     def weight_init(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.uniform_(m.weight, a=-0.0, b=0.0)
+            nn.init.uniform_(m.weight, a=-0.2, b=0.2)
             # nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
         # 也可以判断是否为conv2d，使用相应的初始化方式

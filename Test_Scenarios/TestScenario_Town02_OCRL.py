@@ -450,7 +450,7 @@ class CarEnv_02_Intersection_fixed:
                 vehicle.destroy()
 
         batch = []
-        print("Case_id",self.case_id)
+        # print("Case_id",self.case_id)
 
         for i in range(1,3):
             transform = Transform()
@@ -521,8 +521,8 @@ class CarEnv_02_Intersection_fixed:
         self.case_list = []
         spawn_vehicles = []
         transform = Transform()
-        transform.location.x = 132
-        transform.location.y = 191
+        transform.location.x = 128
+        transform.location.y = 192
         transform.location.z = 1
         transform.rotation.pitch = 0
         transform.rotation.yaw = 0
@@ -716,7 +716,7 @@ class CarEnv_02_Intersection_fixed:
             return None
         
         batch = []
-        print("Case_id",self.case_id)
+        # print("Case_id",self.case_id)
 
         for transform in self.case_list[self.case_id - 1]:
             batch.append(SpawnActor(self.env_vehicle_bp, transform).then(SetAutopilot(FutureActor, True)))
