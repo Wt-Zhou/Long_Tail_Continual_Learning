@@ -521,7 +521,7 @@ class CarEnv_02_Intersection_fixed:
         self.case_list = []
         spawn_vehicles = []
         transform = Transform()
-        transform.location.x = 128
+        transform.location.x = 125
         transform.location.y = 192
         transform.location.z = 1
         transform.rotation.pitch = 0

@@ -145,7 +145,7 @@ class CIPG_Agent():
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # transition model parameter        
-        self.ensemble_num = 3
+        self.ensemble_num = 10
         self.history_frame = 1
         self.future_frame = 1 
         self.discrete_action_num = 10
@@ -246,31 +246,32 @@ class CIPG_Agent():
     def test_performance_in_case(self, obs, candidate_trajectories_tuple):
         true_performance_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
-            true_q_value = []
-            for i in range(self.test_times): 
-                  
-                g_value = self.estimate_ego_value(ego_trajectory)
+            if ocrl_action == 1:
+                true_q_value = []
+                for i in range(self.test_times): 
+                    
+                    g_value = self.estimate_ego_value(ego_trajectory)
 
-                obs = self.env.reset()
-                obs = np.array(obs)
-                ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
-                for j in range(int(self.dt/self.env.dt * self.rollout_length)):
-                    control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
-                    action = [control_action.acc , control_action.steering]                    
-                    
-                    new_obs, reward, done, collision = self.env.step(action)   
-                    self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
-                    self.dynamic_map.update_map_from_list_obs(new_obs)
-                    
-                    if done or j == self.dt/self.env.dt * self.rollout_length-1:
-                        if collision == True:
-                            g_value += self.r_c
-                        true_q_value.append(g_value)
-                        self.clear_buff()
-                        obs = self.env.reset()
-                        break
-            true_q_value = np.mean(true_q_value)
-            true_performance_list.append(true_q_value)
+                    obs = self.env.reset()
+                    obs = np.array(obs)
+                    ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
+                    for j in range(int(self.dt/self.env.dt * self.rollout_length)):
+                        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+                        action = [control_action.acc , control_action.steering]                    
+                        
+                        new_obs, reward, done, collision = self.env.step(action)   
+                        self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
+                        self.dynamic_map.update_map_from_list_obs(new_obs)
+                        
+                        if done or j == self.dt/self.env.dt * self.rollout_length-1:
+                            if collision == True:
+                                g_value += self.r_c
+                            true_q_value.append(g_value)
+                            self.clear_buff()
+                            obs = self.env.reset()
+                            break
+                true_q_value = np.mean(true_q_value)
+                true_performance_list.append(true_q_value)
             
         print("True_Performance", true_performance_list)
                 
@@ -292,7 +293,8 @@ class CIPG_Agent():
             reward = self.collect_data[0][2]
             new_obs = self.collect_data[0][3]
             done = self.collect_data[0][4]
-            self.ensemble_transition_model.update_model(obs, new_obs)
+            for i in range(10):
+                self.ensemble_transition_model.update_model(obs, new_obs)
 
             self.trained_replay_buffer.add(np.array(obs).flatten(), action, reward, np.array(new_obs).flatten(), done)
             self.collect_data.pop(0)
