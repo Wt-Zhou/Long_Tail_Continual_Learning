@@ -37,7 +37,7 @@ OBSTACLES_CONSIDERED = 3
 global start_point
 start_point = Transform()
 start_point.location.x = 8.5
-start_point.location.y = -81
+start_point.location.y = -90
 start_point.location.z = 0.5
 start_point.rotation.pitch = 0
 start_point.rotation.yaw = -90
@@ -55,7 +55,7 @@ goal_point.rotation.roll = 0
 global camera_transform
 camera_transform = Transform()
 camera_transform.location.x = 8.5
-camera_transform.location.y = -81
+camera_transform.location.y = -90
 camera_transform.location.z = 60
 camera_transform.rotation.pitch = -90
 camera_transform.rotation.yaw = -90
@@ -525,7 +525,7 @@ class CarEnv_03_Waymo_Long_Tail:
         transform.location.y = -124
         transform.location.z = 1
         transform.rotation.pitch = 0
-        transform.rotation.yaw = 90
+        transform.rotation.yaw = 110
         transform.rotation.roll = 0
         spawn_vehicles.append(transform)
         # transform = Transform()
@@ -719,7 +719,7 @@ class CarEnv_03_Waymo_Long_Tail:
         print("Case_id",self.case_id)
 
         for transform in self.case_list[self.case_id - 1]:
-            batch.append(SpawnActor(self.env_vehicle_bp, transform).then(SetAutopilot(FutureActor, True)))
+            batch.append(SpawnActor(self.env_vehicle_bp, transform).then(SetAutopilot(FutureActor, False)))
     
         self.client.apply_batch_sync(batch, synchronous_master)
 
@@ -729,8 +729,8 @@ class CarEnv_03_Waymo_Long_Tail:
             self.tm.ignore_signs_percentage(vehicle, 100)
             self.tm.ignore_lights_percentage(vehicle, 100)
             self.tm.ignore_walkers_percentage(vehicle, 0)
-            # if vehicle.attributes['role_name'] != "hero" :
-            #     vehicle.set_target_velocity(Vector3D(x=3))
+            if vehicle.attributes['role_name'] != "hero" :
+                vehicle.set_target_velocity(Vector3D(x=-1, y=3))
             # self.tm.auto_lane_change(vehicle, True)
             
             # path = [carla.Location(x=151, y=186, z=0.038194),

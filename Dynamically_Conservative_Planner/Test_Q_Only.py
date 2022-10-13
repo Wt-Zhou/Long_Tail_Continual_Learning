@@ -24,7 +24,7 @@ from results import Results
 
 TEST_EPISODES = 80000
 LOAD_STEP = 80000
-ROLLOUT_TIMES = 50
+ROLLOUT_TIMES = 1
 
 if __name__ == '__main__':
 
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     # result.clear_old_test_data()
     
     # Loop over episodes
-    for episode in tqdm(range(170, TEST_EPISODES + 1), unit='episodes'):
+    for episode in tqdm(range(0, TEST_EPISODES + 1), unit='episodes'):
         
         print('Restarting episode')
         obs = env.reset()
@@ -62,28 +62,12 @@ if __name__ == '__main__':
             # DCP process            
             agent.history_obs_list.append(obs)
 
-            # if len(agent.history_obs_list) >= agent.history_frame:
-            #     worst_Q_list = agent.calculate_worst_Q_value(agent.history_obs_list, candidate_trajectories_tuple)
-            #     dcp_action = np.where(worst_Q_list==np.max(worst_Q_list))[0] 
-                
-            #     # fixed action:
-            #     dcp_action = np.array([8])
-                
-            #     estimated_q_lower_bound = worst_Q_list[dcp_action[0]]
-
-            #     print("worst_Q_list",worst_Q_list)
-            #     print("dcp_action",dcp_action)
-            #     state = np.array(agent.history_obs_list).flatten().tolist() # for record
-            #     agent.history_obs_list.pop(0)
-
-            # else:
-            #     dcp_action = 0 # brake
             dcp_action = 5
         
             dcp_trajectory = agent.trajectory_planner.trajectory_update_CP(dcp_action)
             
             g_value = 0
-            for i in range(agent.future_frame):
+            for i in range(50):
                 control_action =  agent.controller.get_control(agent.dynamic_map,  dcp_trajectory.trajectory, dcp_trajectory.desired_speed)
                 action = [control_action.acc , control_action.steering]
                 
@@ -112,9 +96,7 @@ if __name__ == '__main__':
 
             
         true_q_value = np.mean(true_q_value)
-        # print("estimated_q_lower_bound", estimated_q_lower_bound)
         print("true_q_value", true_q_value)
-        # result.estimated_q_lower_bound(state, dcp_action, estimated_q_lower_bound, true_q_value)
         
 
          
