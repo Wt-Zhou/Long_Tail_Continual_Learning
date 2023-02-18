@@ -521,9 +521,9 @@ class CarEnv_02_Intersection_fixed:
         self.case_list = []
         spawn_vehicles = []
         transform = Transform()
-        transform.location.x = 125
+        transform.location.x = 121
         transform.location.y = 192
-        transform.location.z = 1
+        transform.location.z = 0.5
         transform.rotation.pitch = 0
         transform.rotation.yaw = 0
         transform.rotation.roll = 0
@@ -626,77 +626,77 @@ class CarEnv_02_Intersection_fixed:
 
         print("How many Cases?",len(self.case_list))
         
-    def init_test_case(self):
-        self.case_list = []
+    # def init_test_case(self):
+    #     self.case_list = []
 
-        # one vehicle from left
-        for i in range(0,50):
-            spawn_vehicles = []
-            transform = Transform()
-            transform.location.x = 110 + i * 0.5
-            transform.location.y = 191.8
-            transform.location.z = 1
-            transform.rotation.pitch = 0
-            transform.rotation.yaw = 0
-            transform.rotation.roll = 0
-            spawn_vehicles.append(transform)
-            self.case_list.append(spawn_vehicles)
+    #     # one vehicle from left
+    #     for i in range(0,50):
+    #         spawn_vehicles = []
+    #         transform = Transform()
+    #         transform.location.x = 110 + i * 0.5
+    #         transform.location.y = 191.8
+    #         transform.location.z = 1
+    #         transform.rotation.pitch = 0
+    #         transform.rotation.yaw = 0
+    #         transform.rotation.roll = 0
+    #         spawn_vehicles.append(transform)
+    #         self.case_list.append(spawn_vehicles)
 
-        # # one vehicle from left, one before ego
-        for i in range(0,10):
-            for j in range(0,10):
-                spawn_vehicles = []
-                transform = Transform()
-                transform.location.x = 125 - i * 0.8
-                transform.location.y = 188
-                transform.location.z = 1
-                transform.rotation.pitch = 0
-                transform.rotation.yaw = 180
-                transform.rotation.roll = 0
-                spawn_vehicles.append(transform)
-                transform = Transform()
-                transform.location.x = 115 + j * 0.8
-                transform.location.y = 191.8
-                transform.location.z = 1
-                transform.rotation.pitch = 0
-                transform.rotation.yaw = 0
-                transform.rotation.roll = 0
-                spawn_vehicles.append(transform)
-                self.case_list.append(spawn_vehicles)
+    #     # # one vehicle from left, one before ego
+    #     for i in range(0,10):
+    #         for j in range(0,10):
+    #             spawn_vehicles = []
+    #             transform = Transform()
+    #             transform.location.x = 125 - i * 0.8
+    #             transform.location.y = 188
+    #             transform.location.z = 1
+    #             transform.rotation.pitch = 0
+    #             transform.rotation.yaw = 180
+    #             transform.rotation.roll = 0
+    #             spawn_vehicles.append(transform)
+    #             transform = Transform()
+    #             transform.location.x = 115 + j * 0.8
+    #             transform.location.y = 191.8
+    #             transform.location.z = 1
+    #             transform.rotation.pitch = 0
+    #             transform.rotation.yaw = 0
+    #             transform.rotation.roll = 0
+    #             spawn_vehicles.append(transform)
+    #             self.case_list.append(spawn_vehicles)
 
-        # 3 vehicles
-        for i in range(0,10):
-            for j in range(0,10):
-                spawn_vehicles = []
-                transform = Transform()
-                transform.location.x = 125 - i * 0.8 
-                transform.location.y = 188
-                transform.location.z = 1
-                transform.rotation.pitch = 0
-                transform.rotation.yaw = 180
-                transform.rotation.roll = 0
-                spawn_vehicles.append(transform)
+    #     # 3 vehicles
+    #     for i in range(0,10):
+    #         for j in range(0,10):
+    #             spawn_vehicles = []
+    #             transform = Transform()
+    #             transform.location.x = 125 - i * 0.8 
+    #             transform.location.y = 188
+    #             transform.location.z = 1
+    #             transform.rotation.pitch = 0
+    #             transform.rotation.yaw = 180
+    #             transform.rotation.roll = 0
+    #             spawn_vehicles.append(transform)
 
-                transform = Transform()
-                transform.location.x = 115 + j * 0.8 + j + 1
-                transform.location.y = 191.8
-                transform.location.z = 1
-                transform.rotation.pitch = 0
-                transform.rotation.yaw = 0
-                transform.rotation.roll = 0
-                spawn_vehicles.append(transform)
+    #             transform = Transform()
+    #             transform.location.x = 115 + j * 0.8 + j + 1
+    #             transform.location.y = 191.8
+    #             transform.location.z = 1
+    #             transform.rotation.pitch = 0
+    #             transform.rotation.yaw = 0
+    #             transform.rotation.roll = 0
+    #             spawn_vehicles.append(transform)
 
-                transform = Transform()
-                transform.location.x = 117 + j * 0.8
-                transform.location.y = 191.8
-                transform.location.z = 1
-                transform.rotation.pitch = 0
-                transform.rotation.yaw = 0
-                transform.rotation.roll = 0
-                spawn_vehicles.append(transform)
-                self.case_list.append(spawn_vehicles)
+    #             transform = Transform()
+    #             transform.location.x = 117 + j * 0.8
+    #             transform.location.y = 191.8
+    #             transform.location.z = 1
+    #             transform.rotation.pitch = 0
+    #             transform.rotation.yaw = 0
+    #             transform.rotation.roll = 0
+    #             spawn_vehicles.append(transform)
+    #             self.case_list.append(spawn_vehicles)
 
-        print("How many Cases?",len(self.case_list))
+    #     print("How many Cases?",len(self.case_list))
 
     def spawn_fixed_veh(self, empty):
         if self.case_id >= len(self.case_list):
@@ -737,8 +737,8 @@ class CarEnv_02_Intersection_fixed:
             #         carla.Location(x=112, y=186, z=0.039417)]
             # self.tm.set_path(vehicle, path)
 
-            # route = ["Left"]
-            # self.tm.set_route(vehicle, route) # set_route seems better than set_path, they both cannot control vehicles that already in a intersection
+            route = ["Right"]
+            self.tm.set_route(vehicle, route) # set_route seems better than set_path, they both cannot control vehicles that already in a intersection
             
     def spawn_ego_veh(self):
         global start_point

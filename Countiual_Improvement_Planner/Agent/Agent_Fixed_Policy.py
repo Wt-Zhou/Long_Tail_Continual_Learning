@@ -167,11 +167,10 @@ class CIPG_Agent():
         self.rollout_trajectory_tuple = []
         
         # imagination parameter        
-        self.rollout_times = 500
-        self.rollout_length = 5
+        self.rollout_times = 1000
+        self.rollout_length = 3
         self.dt = 1
-        self.test_times = 50
-        
+        self.test_times = 1       
         self.ensemble_transition_model = OCRL_Transition_Model(self.ensemble_num, self.history_frame, 
                                                               self.future_frame, self.agent_dimension, self.agent_num,
                                                               self.obs_bias_x, self.obs_bias_y, self.obs_scale, 
@@ -189,7 +188,7 @@ class CIPG_Agent():
         self.dynamic_map.update_ref_path(self.env)
         
         # collision checking parameter
-        self.robot_radius = 3.0 # 
+        self.robot_radius = 2.0 # 
         self.move_gap = 2.5
         self.time_expansion_rate = 0.05
         self.check_radius = self.robot_radius
@@ -205,8 +204,6 @@ class CIPG_Agent():
         candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
         
         # OCRL process            
-        self.history_obs_list.append(obs)
-
         worst_confidence_q_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
             if ocrl_action == 0:
@@ -226,52 +223,81 @@ class CIPG_Agent():
         env = self.env
 
         # Create Agent
-        self.ensemble_transition_model.load(load_step)
+        # self.ensemble_transition_model.load(load_step)
+        obs = env.reset()
         
         # Loop over episodes
         for episode in tqdm(range(1, train_episode + 1), unit='episodes'):
-            
-            # Update Transition Model
-            self.update_ensemble_transition_model()
-            
             print('Restarting episode')
-            obs = env.reset()
-            obs = np.array(obs)
+            self.collect_training_dataset()
+            self.update_ensemble_transition_model()
             ocrl_action, ocrl_trajectory, candidate_trajectories_tuple = self.act(obs)
             self.test_performance_in_case(obs, candidate_trajectories_tuple)
 
+        return None
+    
+    def collect_training_dataset(self):
+        # Which Policy
+        fixed_action = 1
+        data_amount = 5
+        # Which Data Amount
+        for i in range(data_amount):
+            obs = self.env.reset()
+            obs = np.array(obs)
+            self.dynamic_map.update_map_from_list_obs(obs)
+            candidate_trajectories_tuple = self.trajectory_planner.generate_candidate_trajectories(self.dynamic_map)
+
+            ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(fixed_action)
+            for j in range(int(self.dt/self.env.dt * self.rollout_length)):
+                control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+                action = [control_action.acc , control_action.steering]                    
+                new_obs, reward, done, collision = self.env.step(action)   
+                # if j == 10:
+                    # print("true_new_obs",new_obs[1])
+                if j % (self.dt/self.env.dt) == 0:
+                    self.collect_data.append([obs, fixed_action, reward, new_obs, done])
+                    new_obs = obs
                     
+                self.dynamic_map.update_map_from_list_obs(new_obs)
+                
+                if done or j == self.dt/self.env.dt * self.rollout_length-1:
+                    self.clear_buff()
+                    obs = self.env.reset()
+                    break
         return None
 
     def test_performance_in_case(self, obs, candidate_trajectories_tuple):
         true_performance_list = []
         for ocrl_action, ego_trajectory in enumerate(candidate_trajectories_tuple):
-            if ocrl_action == 1:
-                true_q_value = []
-                for i in range(self.test_times): 
-                    
-                    g_value = self.estimate_ego_value(ego_trajectory)
+            true_q_value = []
+            # if ocrl_action == 1:
+            # print("ocrl_action",ocrl_action)
+            for i in range(self.test_times): 
+                
+                g_value = self.estimate_ego_value(ego_trajectory)
 
-                    obs = self.env.reset()
-                    obs = np.array(obs)
-                    ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
-                    for j in range(int(self.dt/self.env.dt * self.rollout_length)):
-                        control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
-                        action = [control_action.acc , control_action.steering]                    
-                        
-                        new_obs, reward, done, collision = self.env.step(action)   
-                        self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
-                        self.dynamic_map.update_map_from_list_obs(new_obs)
-                        
-                        if done or j == self.dt/self.env.dt * self.rollout_length-1:
-                            if collision == True:
-                                g_value += self.r_c
-                            true_q_value.append(g_value)
-                            self.clear_buff()
-                            obs = self.env.reset()
-                            break
-                true_q_value = np.mean(true_q_value)
-                true_performance_list.append(true_q_value)
+                obs = self.env.reset()
+                obs = np.array(obs)
+                ocrl_trajectory = self.trajectory_planner.trajectory_update_CP(ocrl_action)
+                # print("velocity",ocrl_trajectory.desired_speed)
+                for j in range(int(self.dt/self.env.dt * self.rollout_length)):
+                    control_action =  self.controller.get_control(self.dynamic_map, ocrl_trajectory.trajectory, ocrl_trajectory.desired_speed)
+                    action = [control_action.acc , control_action.steering]                    
+                    
+                    new_obs, reward, done, collision = self.env.step(action)   
+                    # self.collect_data.append([obs, ocrl_action, reward, new_obs, done])
+                    self.dynamic_map.update_map_from_list_obs(new_obs)
+                    
+                    if done or j == self.dt/self.env.dt * self.rollout_length-1:
+                        if collision == True:
+                            colli_step = round(j/(self.dt/self.env.dt))
+                            g_value += (self.gamma ** colli_step) * self.r_c
+                        true_q_value.append(g_value)
+                        self.clear_buff()
+                        obs = self.env.reset()
+                        break
+            true_q_value = np.mean(true_q_value)
+            true_performance_list.append(true_q_value)
             
         print("True_Performance", true_performance_list)
                 
@@ -287,13 +313,14 @@ class CIPG_Agent():
     def update_ensemble_transition_model(self):
         print("[OCRL] Start Update Transition Model!")
         data_amount = len(self.collect_data)
+        data_repeat_amount = 1
         for i in range(data_amount):
             obs = self.collect_data[0][0]
             action = self.collect_data[0][1]
             reward = self.collect_data[0][2]
             new_obs = self.collect_data[0][3]
             done = self.collect_data[0][4]
-            for i in range(10):
+            for i in range(data_repeat_amount):
                 self.ensemble_transition_model.update_model(obs, new_obs)
 
             self.trained_replay_buffer.add(np.array(obs).flatten(), action, reward, np.array(new_obs).flatten(), done)
@@ -379,9 +406,7 @@ class CIPG_Agent():
                     # print("time",time4-time3,time3-time22, time22-time2, time2-time1)
 
                     break
-                
 
-          
         q_ego = self.estimate_ego_value(ego_trajectory)
         
         init_obs = torch.tensor(self.ensemble_transition_model.normalize_state(np.array(s_0))).to(self.device)
@@ -390,6 +415,13 @@ class CIPG_Agent():
             q_env = 0
         print("q_ego",q_ego)
         print("q_env",q_env)
+        test_obs_list = self.ensemble_transition_model.rollout(np.array(s_0), ocrl_action, self.get_ego_state_from_trajectory(ego_trajectory, 0))
+        print("test_obs_list",test_obs_list[0][1])
+        print("test_obs_list",test_obs_list[1][1])
+        print("test_obs_list",test_obs_list[2][1])
+        # print("test_obs_list",test_obs_list[3][1])
+        # print("test_obs_list",test_obs_list[4][1])
+        # print("test_obs_list",test_obs_list[5][1])
         worst_q = q_ego + q_env
         return worst_q
     
@@ -502,8 +534,7 @@ class CIPG_Agent():
             self.Q_optimizer.step()
             self.imagine_replay_buffer.update_priorities(indices, prios.data.cpu().numpy())
         time2 = time.time()
-
-            
+          
     def update_Q_network_with_buffer_acc(self):
         time1 = time.time()
         obs, ocrl_action, reward, new_obs_list, done, indices, weights = self.imagine_replay_buffer.sample(self.q_batch_size)
@@ -566,7 +597,7 @@ class OCRL_Transition_Model():
                 env_transition.train()
   
             self.ensemble_models.append(env_transition)
-            self.ensemble_optimizer.append(torch.optim.Adam(env_transition.parameters(), lr=0.005, weight_decay=0))
+            self.ensemble_optimizer.append(torch.optim.Adam(env_transition.parameters(), lr=0.001, weight_decay=0))
             
         # transition vehicle model
         self.wheelbase = 2.96
@@ -618,7 +649,6 @@ class OCRL_Transition_Model():
             for i in range(0,self.agent_num-vehicle_num):
                 next_obs.append([-999,-999,0,0,0])
             next_obs_list.append(next_obs)
-        
         return next_obs_list
   
     def normalize_state(self, obs):

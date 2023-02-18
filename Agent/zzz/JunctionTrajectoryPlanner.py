@@ -12,13 +12,13 @@ from Agent.zzz.tools import *
 MAX_SPEED = 50.0 / 3.6  # maximum speed [m/s]
 MAX_ACCEL = 10.0  # maximum acceleration [m/ss]
 MAX_CURVATURE = 500.0  # maximum curvature [1/m]
-MAX_ROAD_WIDTH = 2.0   # maximum road width [m] # related to RL action space
+MAX_ROAD_WIDTH = 4.0   # maximum road width [m] # related to RL action space
 D_ROAD_W = 2.0  # road width sampling length [m]
 DT = 0.1  # time tick [s]
-MAXT = 6.01  # max prediction time [m]
-MINT = 6.0  # min prediction time [m]
+MAXT = 8.01  # max prediction time [m]
+MINT = 8.0  # min prediction time [m]
 TARGET_SPEED = 30.0 / 3.6  # target speed [m/s]
-D_T_S = 14.0 / 3.6  # target speed sampling length [m/s]
+D_T_S = 10.0 / 3.6  # target speed sampling length [m/s]
 N_S_SAMPLE = 2  # sampling number of target speed
 
 # Collision check
@@ -26,7 +26,7 @@ OBSTACLES_CONSIDERED = 4
 ROBOT_RADIUS = 1.0  # robot radius [m]
 RADIUS_SPEED_RATIO = 0 # higher speed, bigger circle
 MOVE_GAP = 1.0
-ONLY_SAMPLE_TO_LEFT = False
+ONLY_SAMPLE_TO_RIGHT = True
 
 # Cost weights
 KJ = 0.1
@@ -312,11 +312,11 @@ class JunctionTrajectoryPlanner(object):
         c_d_dd = start_state.c_d_dd
 
         # generate path to each offset goal
-        if ONLY_SAMPLE_TO_LEFT:
-            left_sample_bound = D_ROAD_W
+        if ONLY_SAMPLE_TO_RIGHT:
+            right_sample_bound = 0.1
         else:
-            left_sample_bound = MAX_ROAD_WIDTH 
-        for di in np.arange(-MAX_ROAD_WIDTH, left_sample_bound+0.1, D_ROAD_W):
+            right_sample_bound = MAX_ROAD_WIDTH 
+        for di in np.arange(-right_sample_bound, MAX_ROAD_WIDTH+0.1, D_ROAD_W):
             # Lateral motion planning
             for Ti in np.arange(self.mint, self.maxt, self.dt):
                 fp = Frenet_path()

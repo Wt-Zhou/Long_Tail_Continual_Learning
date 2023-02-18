@@ -19,6 +19,8 @@ from Agent.zzz.JunctionTrajectoryPlanner_simple_predict import \
 # from results import Results
 from Test_Scenarios.TestScenario_Town02_Fixed_State import \
     CarEnv_02_Intersection_fixed_state
+from Test_Scenarios.TestScenario_Town03_Waymo_long_tail import \
+    CarEnv_03_Waymo_Long_Tail
 
 # try:
 # 	sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
@@ -42,7 +44,7 @@ if __name__ == '__main__':
 
     # Create environment
     
-    env = CarEnv_02_Intersection_fixed_state()
+    env = CarEnv_03_Waymo_Long_Tail()
 
     # Create Agent
     trajectory_planner = JunctionTrajectoryPlanner()

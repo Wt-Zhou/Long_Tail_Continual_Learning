@@ -36,7 +36,7 @@ OBSTACLES_CONSIDERED = 3
 
 global start_point
 start_point = Transform()
-start_point.location.x = 8.5
+start_point.location.x = 5.5
 start_point.location.y = -90
 start_point.location.z = 0.5
 start_point.rotation.pitch = 0
@@ -45,7 +45,7 @@ start_point.rotation.roll = 0
 
 global goal_point
 goal_point = Transform()
-goal_point.location.x = 9
+goal_point.location.x = 5.5
 goal_point.location.y = -156
 goal_point.location.z = 0
 goal_point.rotation.pitch = 0
@@ -225,7 +225,7 @@ class CarEnv_03_Waymo_Long_Tail:
     def ego_vehicle_collision(self, event):
         self.ego_vehicle_collision_sign = True
         self.ego_vehicle_collision_actor = event.other_actor
-        print("collision_id", self.ego_vehicle_collision_actor)
+        # print("collision_id", self.ego_vehicle_collision_actor)
 
     def wrap_state(self):
         # state = [0 for i in range((OBSTACLES_CONSIDERED + 1) * 4)]
@@ -521,11 +521,11 @@ class CarEnv_03_Waymo_Long_Tail:
         self.case_list = []
         spawn_vehicles = []
         transform = Transform()
-        transform.location.x = 12 
-        transform.location.y = -124
+        transform.location.x = 12.8 
+        transform.location.y = -123
         transform.location.z = 1
         transform.rotation.pitch = 0
-        transform.rotation.yaw = 110
+        transform.rotation.yaw = 100
         transform.rotation.roll = 0
         spawn_vehicles.append(transform)
         # transform = Transform()
@@ -716,7 +716,7 @@ class CarEnv_03_Waymo_Long_Tail:
             return None
         
         batch = []
-        print("Case_id",self.case_id)
+        # print("Case_id",self.case_id)
 
         for transform in self.case_list[self.case_id - 1]:
             batch.append(SpawnActor(self.env_vehicle_bp, transform).then(SetAutopilot(FutureActor, False)))
@@ -730,7 +730,7 @@ class CarEnv_03_Waymo_Long_Tail:
             self.tm.ignore_lights_percentage(vehicle, 100)
             self.tm.ignore_walkers_percentage(vehicle, 0)
             if vehicle.attributes['role_name'] != "hero" :
-                vehicle.set_target_velocity(Vector3D(x=-1, y=3))
+                vehicle.set_target_velocity(Vector3D(x=-3, y=2.5))
             # self.tm.auto_lane_change(vehicle, True)
             
             # path = [carla.Location(x=151, y=186, z=0.038194),

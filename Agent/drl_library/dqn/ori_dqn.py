@@ -63,7 +63,6 @@ class DQN():
         #     capacity= 1000000,
         #     batch_size= self.batch_size,
         #     device=self.device)      
-        self.TS = TrustHybridset(10, 11)
         
     def compute_td_loss(self, batch_size, beta, gamma):
         state, action, reward, next_state, done, indices, weights = self.replay_buffer.sample(batch_size, beta) 
@@ -141,8 +140,6 @@ class DQN():
 
             # self.replay_buffer.add(obs, np.array([dqn_action]), np.array([reward]), new_obs, np.array([done]))
             self.replay_buffer.push(obs, dqn_action, reward, new_obs, done)
-
-            self.TS.add_data_during_data_collection(obs, dqn_action, reward, done)
             
             obs = new_obs
             obs_ori = new_obs_ori
