@@ -147,7 +147,7 @@ class Record_Process():
                             a_list.append(math.sqrt(one_obs.acceleration.x**2+one_obs.acceleration.y**2))
                             
                         if len(v_car_list) > 0:
-                            v_car = int(sum(v_car_list)/len(v_car_list)*50)
+                            v_car = int(sum(v_car_list)/len(v_car_list)*10)
                             obs_v_car_count[v_car] += 1
                         if len(v_people_list) > 0:
                             v_people = int(sum(v_people_list)/len(v_people_list)*10)
@@ -211,9 +211,10 @@ class Record_Process():
         return files
 
     def plot_a_case(self):
-        file_name = "/home/zwt/apollo/data/bag/0214/zwt/20230214145849.record.00000" 
-        start_time = 1676357965.241 * 10**9
-        end_time=1676357973.241 * 10**9
+        file_name = "/home/zwt/apollo/data/bag/0215/0215_afternoon_1/20230215143531.record.00004" 
+        start_time = 1676443213.579 * 10**9
+        end_time=1676443223.579 * 10**9
+
         
         record = Record(file_name)
         
@@ -245,7 +246,7 @@ class Record_Process():
         for topic, message, t in record.read_messages('/apollo/perception/obstacles', \
                                                         start_time=start_time, end_time=end_time):  #100Hz
             for obs in message.perception_obstacle:
-                if obs.id == 2278:
+                if obs.id == 3903:                    
                     obs_x.append(obs.position.x)
                     obs_y.append(obs.position.y)
 
@@ -278,6 +279,7 @@ class Record_Process():
         plt.autoscale()
         plt.gca().set_facecolor('none')
         plt.xlabel('时间(s)',fontsize=13)
+        plt.ylim(0, max(v))
         plt.ylabel('速度(m/s)',fontsize=13)
         plt.gca().set_aspect(0.75) 
         plt.show()
@@ -286,6 +288,7 @@ class Record_Process():
         plt.autoscale()
         plt.gca().set_facecolor('none')
         plt.xlabel('时间(s)',fontsize=13)
+        plt.ylim(0, max(a))
         plt.ylabel('加速度(m/s$^2$)',fontsize=13)
         plt.gca().set_aspect(0.75) 
         plt.show()
@@ -295,6 +298,7 @@ class Record_Process():
         plt.gca().set_facecolor('none')
         plt.xlabel('时间(s)',fontsize=13)
         plt.ylabel('方向盘转角($^{\circ}$)',fontsize=13)
+        plt.ylim(min(steer)-10, max(steer)+10)
         plt.gca().set_aspect(0.1) 
         plt.show()
         
@@ -318,8 +322,8 @@ class Record_Process():
         plt.gca().set_aspect(1.0) 
         plt.show()
 
-    def get_trajectory_from_file(self):
-        file_name = "/home/zwt/apollo/data/bag/0214/zwt2/20230214172610.record.00001"   
+    def get_trajectory_from_file(self, file_name):
+        # file_name = "/home/zwt/apollo/data/bag/0217/20230217143216.record.00001"   
         record = Record(file_name)
     
         env_obs_list = []
@@ -329,24 +333,33 @@ class Record_Process():
             
         for topic, message, t in record.read_messages('/apollo/planning'):  
             action_list.append([message,t])
-
-        for action in action_list:
-            t = action[1]
-            perception_obstacle = None
-            last_t = t
-            for topic_perception, message_perception, t_perception in record.read_messages('/apollo/perception/obstacles', start_time=last_t-0.1* 10**9, end_time=last_t):
+        print("action_list",len(action_list))
+        
+        i = 0
+        for topic_perception, message_perception, t_perception in record.read_messages('/apollo/perception/obstacles'):
+            last_t = action_list[i][1]
+            if t_perception > last_t - 0.2* 10**9 and t_perception < last_t:
                 perception_obstacle = message_perception.perception_obstacle
-                last_t = t_perception
-            env_obs_list.append([perception_obstacle,last_t])
-
-            pose = None
-            for topic_pose, message_pose, t_pose in record.read_messages('/apollo/localization/pose', start_time=last_t-0.1* 10**9, end_time=last_t):
+                env_obs_list.append([perception_obstacle,t_perception])
+                i += 1
+            if i >= len(action_list):
+                break
+        
+        i = 0
+        for topic_pose, message_pose, t_pose in record.read_messages('/apollo/localization/pose'):
+            last_t = action_list[i][1]
+            if t_pose > last_t - 0.1* 10**9 and t_pose < last_t:
                 pose = message_pose.pose
-                last_t = t_pose
-            ego_obs_list.append([pose,last_t])
-
+                ego_obs_list.append([pose,t_pose])
+                i += 1
+            if i >= len(action_list):
+                break
+        
+        
         trajectory = [ego_obs_list,env_obs_list,action_list]           
-            
+        print("ego_obs_list",len(ego_obs_list))
+        print("env_obs_list",len(env_obs_list))
+
         return trajectory
 
 if __name__ == '__main__':
@@ -358,9 +371,10 @@ if __name__ == '__main__':
 
     message_name = '/apollo/localization/pose'
     
+    # record_process.plot_pose(["/home/zwt/apollo/data/bag/0215/0215_morning/20230215104439.record.00001"])
     # record_process.plot_info_with_time(files,990000)
     record_process.plot_a_case()
 
     # for file_name in files:
-    #     record_process.parse_pose(folder_path+file_name)
+    # record_process.plot_long_tail(files, 50000)
     

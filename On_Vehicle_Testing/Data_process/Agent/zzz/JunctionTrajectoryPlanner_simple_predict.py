@@ -17,11 +17,11 @@ D_CENTER = 0
 D_WIDTH = 0.5  
 D_S_SAMPLE = 0.5
 DT = 0.1  # time tick [s]
-MAXT = 6.1  # max prediction time [m]
-MINT = 6.0  # min prediction time [m]
-TARGET_SPEED = 20.0 / 3.6  # target speed [m/s]
+MAXT = 5.1  # max prediction time [m]
+MINT = 5.0  # min prediction time [m]
+TARGET_SPEED = 10.0 / 3.6  # target speed [m/s]
 D_T_S = 5.0 / 3.6  # target speed sampling length [m/s]
-N_S_SAMPLE = 4  # sampling number of target speed
+N_S_SAMPLE = 1  # sampling number of target speed
 
 # Collision check
 OBSTACLES_CONSIDERED = 50
@@ -115,10 +115,12 @@ class JunctionTrajectoryPlanner_SP(object):
                 k = min(len(generated_trajectory.s_d),5)-1
                 desired_speed = generated_trajectory.s_d
                 trajectory_array_ori = np.c_[generated_trajectory.x, generated_trajectory.y]
+                print("debug",generated_trajectory.x)
+                print("debug",generated_trajectory.s)
                 trajectory_array = trajectory_array_ori#dense_polyline2d(trajectory_array_ori,1)
                 self.last_trajectory_array_rule = trajectory_array
                 self.last_trajectory_rule = generated_trajectory     
-                # print("[UBP]: ----> Werling Successful Planning")
+                print("[UBP]: ----> Werling Successful Planning")
             
             elif len(self.last_trajectory_rule.s_d) > 5 and self.c_speed > 1:
                 generated_trajectory = self.last_trajectory_rule
@@ -133,6 +135,8 @@ class JunctionTrajectoryPlanner_SP(object):
                 desired_speed = [0] * len(trajectory_array)
                 print("[UBP]: ----> Werling Output ref path")
 
+            print("debug,trajectory_array",trajectory_array)
+            print("debug,desired_speed",desired_speed)
             # desired spped is calculate from frenet path, but sometimes frenet path is much longger than real path(spline2D), so we need to cut value in frenet according to th length of spline2D
             desired_speed = desired_speed[:len(trajectory_array)]
             trajectory, velocity_trajectory = dense_polyline2d_withvelocity(trajectory_array, np.array(desired_speed), 0.2)
@@ -161,7 +165,7 @@ class JunctionTrajectoryPlanner_SP(object):
             self.all_trajectory = path_tuples
 
             # generate brake path
-            self.brake_trajectory = self.calc_brake_paths(c_speed, start_state, self.csp)
+            self.brake_trajectory = self.calc_brake_paths(self.c_speed, start_state, self.csp)
 
             return self.all_trajectory
        
@@ -208,8 +212,8 @@ class JunctionTrajectoryPlanner_SP(object):
 
         try:
             # calculate dist to the end of ref path 
-            if self.ref_path is not None:
-                self.dist_to_end = dist_from_point_to_polyline2d(dynamic_map.ego_vehicle.x, dynamic_map.ego_vehicle.y, self.ref_path, return_end_distance=True)
+            # if self.ref_path is not None:
+            #     self.dist_to_end = dist_from_point_to_polyline2d(dynamic_map.ego_vehicle.x, dynamic_map.ego_vehicle.y, self.ref_path, return_end_distance=True)
 
             # estabilish frenet frame
             if self.csp is None: # or self.dist_to_end[4] < 10 or self.dist_to_end[0] > 20:
@@ -218,7 +222,7 @@ class JunctionTrajectoryPlanner_SP(object):
             return True
 
         except:
-            # print("[UBP]: ------> Initialize fail ")
+            print("[UBP]: ------> Initialize fail ")
             return False
 
     def ref_tail_speed(self, dynamic_map, desired_speed):
@@ -333,10 +337,10 @@ class JunctionTrajectoryPlanner_SP(object):
         self.brake_trajectory = self.calc_brake_paths(c_speed, start_state, self.csp)
 
         for fp, score, index in sorted_fplist:
-            if self.obs_prediction.check_collision(fp):
-                return fp, index + 1 # 0 for brake trajectory
+            # if self.obs_prediction.check_collision(fp):
+            return fp, index + 1 # 0 for brake trajectory
 
-        print("self.tagert",self.target_speed)
+        print("self.target_speed",self.target_speed)
 
         return None,0
 
@@ -493,13 +497,13 @@ class JunctionTrajectoryPlanner_SP(object):
             #     fp.ds.append(0.1)
 
             # calc curvature
-            fp.c = (np.diff(fp.yaw) / np.array(fp.ds)).tolist()
+            # fp.c = (np.diff(fp.yaw) / np.array(fp.ds)).tolist()
 
-            # for i in range(len(fp.yaw) - 1):
-            #     # carla simulation bug
-            #     if fp.ds[i]<0.00001:
-            #         fp.ds[i] = 0.1
-            #     fp.c.append((fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i])
+            for i in range(len(fp.yaw) - 1):
+                # carla simulation bug
+                if fp.ds[i]<0.00001:
+                    fp.ds[i] = 0.1
+                fp.c.append((fp.yaw[i + 1] - fp.yaw[i]) / fp.ds[i])
 
         return fplist
 
